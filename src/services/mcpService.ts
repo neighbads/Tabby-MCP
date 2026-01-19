@@ -64,10 +64,12 @@ export class McpService {
      * Register a single tool
      */
     public registerTool(tool: McpTool): void {
-        this.server.tool(
+        // Use type assertion to avoid "Type instantiation is excessively deep" error
+        // This is a known issue with complex zod + MCP SDK type inference
+        (this.server.tool as any)(
             tool.name,
             tool.description,
-            tool.schema as z.ZodRawShape,
+            tool.schema,
             tool.handler
         );
         this.logger.info(`Registered tool: ${tool.name}`);
@@ -153,6 +155,19 @@ export class McpService {
                     res.status(500).send('Failed to establish SSE connection');
                 }
             }
+        });
+
+        // POST /sse handler for Streamable HTTP transport (fallback response)
+        // Some MCP clients try POST /sse first (Streamable HTTP), then fallback to GET /sse
+        this.app.post('/sse', (req: Request, res: Response) => {
+            this.logger.debug('Received POST /sse request, redirecting to SSE-only mode');
+            // Return 405 Method Not Allowed with proper headers
+            res.setHeader('Allow', 'GET');
+            res.status(405).json({
+                error: 'Method Not Allowed',
+                message: 'This server uses SSE transport. Use GET /sse for SSE connection and POST /messages for sending messages.',
+                hint: 'Configure your client to use SSE-only mode'
+            });
         });
 
         // Messages endpoint for SSE transport
