@@ -1,7 +1,7 @@
 {
   "name": "tabby-mcp-server",
-  "version": "1.0.3",
-  "description": "MCP (Model Context Protocol) server plugin for Tabby terminal - Complete terminal control with 18 MCP tools",
+  "version": "1.0.4",
+  "description": "MCP (Model Context Protocol) server plugin for Tabby terminal - Complete terminal control with 21 MCP tools",
   "homepage": "https://github.com/GentlemanHu/Tabby-MCP",
   "repository": {
     "type": "git",

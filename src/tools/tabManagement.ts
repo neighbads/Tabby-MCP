@@ -378,17 +378,63 @@ Set waitForReady=false (default) for immediate return - use get_session_list to 
                         const tabIndex = this.app.tabs.indexOf(tab);
 
                         if (waitForReady) {
-                            // Wait for the terminal to be ready
+                            // Wait for the terminal session to be fully connected
+                            // Timing is configurable via Settings → MCP → Timing
+                            const timing = this.config.store.mcp?.timing || {};
+                            const sessionPollInterval = timing.sessionPollInterval ?? 200;
+                            const sessionStableChecks = timing.sessionStableChecks ?? 5;
+
                             const startTime = Date.now();
                             let ready = false;
+                            let lastBufferLength = 0;
+                            let stableCount = 0;
 
                             while (Date.now() - startTime < timeout) {
-                                // Check if terminal frontend is available
-                                if ((tab as any).frontend && (tab as any).sessionReady !== false) {
+                                const tabAny = tab as any;
+
+                                // Check multiple indicators of connection readiness:
+                                // 1. frontend exists (terminal rendered)
+                                // 2. session exists and is open
+                                // 3. sessionReady is explicitly true
+                                // 4. buffer has content (indicates activity)
+                                const hasSession = tabAny.session !== undefined;
+                                const sessionOpen = tabAny.session?.open === true;
+                                const frontendReady = tabAny.frontend !== undefined;
+                                const sessionReady = tabAny.sessionReady === true;
+
+                                // Also check if terminal buffer has content (indicates connection activity)
+                                let bufferLength = 0;
+                                try {
+                                    const xterm = tabAny.frontend?.xterm;
+                                    if (xterm?.buffer?.active) {
+                                        bufferLength = xterm.buffer.active.length;
+                                    }
+                                } catch (e) {
+                                    // Ignore buffer access errors
+                                }
+
+                                // Consider ready if:
+                                // - Session is open, OR
+                                // - Frontend is ready AND sessionReady is true, OR
+                                // - Terminal buffer has stabilized with content
+                                if (sessionOpen || (frontendReady && sessionReady)) {
                                     ready = true;
                                     break;
                                 }
-                                await new Promise(resolve => setTimeout(resolve, 200));
+
+                                // Check for buffer stability (activity settled)
+                                if (bufferLength > 0 && bufferLength === lastBufferLength) {
+                                    stableCount++;
+                                    if (stableCount >= sessionStableChecks) {
+                                        ready = true;
+                                        break;
+                                    }
+                                } else {
+                                    stableCount = 0;
+                                    lastBufferLength = bufferLength;
+                                }
+
+                                await new Promise(resolve => setTimeout(resolve, sessionPollInterval));
                             }
 
                             this.logger.info(`Opened profile: ${profile.name} (ready: ${ready})`);

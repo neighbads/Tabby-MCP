@@ -12,7 +12,7 @@
 
 **A Comprehensive MCP Server Plugin for Tabby Terminal**
 
-*Connect AI assistants to your terminal with full control capabilities — 18 MCP tools included*
+*Connect AI assistants to your terminal with full control capabilities — 21 MCP tools included*
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -28,9 +28,9 @@
 
 ### 🖥️ Terminal Control
 - Execute commands with output capture
+- Send interactive input (vim, less, top)
 - Read terminal buffer content
-- Abort running commands
-- List all terminal sessions
+- Abort/monitor running commands
 
 </td>
 <td width="50%">
@@ -211,14 +211,16 @@ For clients that don't support SSE, use the STDIO bridge:
 
 ## 🛠️ Available Tools
 
-### Terminal Control (4)
+### Terminal Control (6)
 
 | Tool | Description |
 |------|-------------|
 | `get_session_list` | List all terminal sessions |
 | `exec_command` | Execute command with output |
+| `send_input` | Send interactive input (Ctrl+C, etc) |
 | `get_terminal_buffer` | Read terminal buffer |
 | `abort_command` | Abort running command |
+| `get_command_status` | Monitor active commands |
 
 ### Tab Management (10)
 

@@ -1,16 +1,22 @@
-import { Component } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { ConfigService } from 'tabby-core';
 import { McpService } from '../services/mcpService';
 import { McpLoggerService } from '../services/mcpLogger.service';
+
+// Version from package.json - update on each release
+const PLUGIN_VERSION = '1.0.4';
 
 /**
  * MCP Settings Tab Component
  */
 @Component({
-    selector: 'mcp-settings-tab',
-    template: `
+  selector: 'mcp-settings-tab',
+  template: `
     <div class="mcp-settings">
-      <h3>🔌 MCP Server Settings</h3>
+      <div class="header-row">
+        <h3>🔌 MCP Server Settings</h3>
+        <span class="version-badge">v{{ version }}</span>
+      </div>
       
       <div class="form-group">
         <label>Server Status</label>
@@ -36,14 +42,14 @@ import { McpLoggerService } from '../services/mcpLogger.service';
       <div class="form-group">
         <label>Port</label>
         <input type="number" class="form-control" [(ngModel)]="config.store.mcp.port" 
-               placeholder="3001" min="1024" max="65535">
+               placeholder="3001" min="1024" max="65535" (change)="saveConfig()">
         <small class="form-text text-muted">MCP server port (default: 3001)</small>
       </div>
 
       <div class="form-group">
         <div class="checkbox">
           <label>
-            <input type="checkbox" [(ngModel)]="config.store.mcp.startOnBoot">
+            <input type="checkbox" [(ngModel)]="config.store.mcp.startOnBoot" (change)="saveConfig()">
             Start server on Tabby launch
           </label>
         </div>
@@ -56,7 +62,7 @@ import { McpLoggerService } from '../services/mcpLogger.service';
       <div class="form-group">
         <div class="checkbox">
           <label>
-            <input type="checkbox" [(ngModel)]="config.store.mcp.enableLogging">
+            <input type="checkbox" [(ngModel)]="config.store.mcp.enableLogging" (change)="saveConfig()">
             Enable logging
           </label>
         </div>
@@ -64,7 +70,7 @@ import { McpLoggerService } from '../services/mcpLogger.service';
 
       <div class="form-group" *ngIf="config.store.mcp.enableLogging">
         <label>Log Level</label>
-        <select class="form-control" [(ngModel)]="config.store.mcp.logLevel">
+        <select class="form-control" [(ngModel)]="config.store.mcp.logLevel" (change)="saveConfig()">
           <option value="debug">Debug</option>
           <option value="info">Info</option>
           <option value="warn">Warning</option>
@@ -74,6 +80,7 @@ import { McpLoggerService } from '../services/mcpLogger.service';
 
       <div class="form-group" *ngIf="config.store.mcp.enableLogging">
         <button class="btn btn-sm btn-secondary" (click)="viewLogs()">View Logs</button>
+        <button class="btn btn-sm btn-outline-secondary ml-2" (click)="exportLogsToFile()">Export JSON</button>
         <button class="btn btn-sm btn-outline-secondary ml-2" (click)="clearLogs()">Clear Logs</button>
       </div>
 
@@ -84,7 +91,7 @@ import { McpLoggerService } from '../services/mcpLogger.service';
       <div class="form-group">
         <div class="checkbox">
           <label>
-            <input type="checkbox" [(ngModel)]="config.store.mcp.pairProgrammingMode.enabled">
+            <input type="checkbox" [(ngModel)]="config.store.mcp.pairProgrammingMode.enabled" (change)="saveConfig()">
             Enable Pair Programming Mode
           </label>
         </div>
@@ -96,7 +103,7 @@ import { McpLoggerService } from '../services/mcpLogger.service';
       <div class="form-group" *ngIf="config.store.mcp.pairProgrammingMode.enabled">
         <div class="checkbox">
           <label>
-            <input type="checkbox" [(ngModel)]="config.store.mcp.pairProgrammingMode.showConfirmationDialog">
+            <input type="checkbox" [(ngModel)]="config.store.mcp.pairProgrammingMode.showConfirmationDialog" (change)="saveConfig()">
             Show confirmation dialog
           </label>
         </div>
@@ -105,10 +112,45 @@ import { McpLoggerService } from '../services/mcpLogger.service';
       <div class="form-group" *ngIf="config.store.mcp.pairProgrammingMode.enabled">
         <div class="checkbox">
           <label>
-            <input type="checkbox" [(ngModel)]="config.store.mcp.pairProgrammingMode.autoFocusTerminal">
+            <input type="checkbox" [(ngModel)]="config.store.mcp.pairProgrammingMode.autoFocusTerminal" (change)="saveConfig()">
             Auto-focus terminal on command execution
           </label>
         </div>
+      </div>
+
+      <hr />
+
+      <h4>⏱️ Timing Settings</h4>
+      <small class="form-text text-muted mb-2">
+        Advanced timing configuration for command execution and session detection
+      </small>
+
+      <div class="form-group">
+        <label>Poll Interval (ms)</label>
+        <input type="number" class="form-control" [(ngModel)]="config.store.mcp.timing.pollInterval" 
+               placeholder="100" min="50" max="1000" (change)="saveConfig()">
+        <small class="form-text text-muted">How often to check for command output (default: 100)</small>
+      </div>
+
+      <div class="form-group">
+        <label>Initial Delay (ms)</label>
+        <input type="number" class="form-control" [(ngModel)]="config.store.mcp.timing.initialDelay" 
+               placeholder="0" min="0" max="5000" (change)="saveConfig()">
+        <small class="form-text text-muted">Delay before polling starts (default: 0)</small>
+      </div>
+
+      <div class="form-group">
+        <label>Session Stable Checks</label>
+        <input type="number" class="form-control" [(ngModel)]="config.store.mcp.timing.sessionStableChecks" 
+               placeholder="5" min="1" max="20" (change)="saveConfig()">
+        <small class="form-text text-muted">Number of stable checks for session ready detection (default: 5)</small>
+      </div>
+
+      <div class="form-group">
+        <label>Session Poll Interval (ms)</label>
+        <input type="number" class="form-control" [(ngModel)]="config.store.mcp.timing.sessionPollInterval" 
+               placeholder="200" min="100" max="2000" (change)="saveConfig()">
+        <small class="form-text text-muted">Interval for session ready polling (default: 200)</small>
       </div>
 
       <hr />
@@ -124,11 +166,28 @@ import { McpLoggerService } from '../services/mcpLogger.service';
           <button class="btn btn-sm btn-outline-primary" (click)="copyConfig()">Copy Config</button>
         </div>
       </div>
+
+      <div class="save-status mt-3" *ngIf="saveMessage">
+        <span class="text-success">{{ saveMessage }}</span>
+      </div>
     </div>
   `,
-    styles: [`
+  styles: [`
     .mcp-settings {
       padding: 1rem;
+    }
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .version-badge {
+      background: rgba(0, 123, 255, 0.2);
+      color: #007bff;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.85em;
+      font-weight: bold;
     }
     .status-container {
       display: flex;
@@ -164,58 +223,107 @@ import { McpLoggerService } from '../services/mcpLogger.service';
       font-size: 0.85em;
       overflow-x: auto;
     }
+    .ml-2 {
+      margin-left: 0.5rem;
+    }
+    .mb-2 {
+      margin-bottom: 0.5rem;
+      display: block;
+    }
+    .save-status {
+      padding: 0.5rem;
+      background: rgba(40, 167, 69, 0.1);
+      border-radius: 4px;
+    }
   `]
 })
-export class McpSettingsTabComponent {
-    constructor(
-        public config: ConfigService,
-        private mcpService: McpService,
-        private logger: McpLoggerService
-    ) { }
+export class McpSettingsTabComponent implements OnInit {
+  version = PLUGIN_VERSION;
+  saveMessage = '';
 
-    get isRunning(): boolean {
-        return this.mcpService.isServerRunning();
+  constructor(
+    public config: ConfigService,
+    private mcpService: McpService,
+    private logger: McpLoggerService
+  ) { }
+
+  ngOnInit(): void {
+    // Ensure timing config exists
+    if (!this.config.store.mcp.timing) {
+      this.config.store.mcp.timing = {
+        pollInterval: 100,
+        initialDelay: 0,
+        sessionStableChecks: 5,
+        sessionPollInterval: 200
+      };
     }
+  }
 
-    get activeConnections(): number {
-        return this.mcpService.getActiveConnections();
+  get isRunning(): boolean {
+    return this.mcpService.isServerRunning();
+  }
+
+  get activeConnections(): number {
+    return this.mcpService.getActiveConnections();
+  }
+
+  async toggleServer(): Promise<void> {
+    if (this.isRunning) {
+      await this.mcpService.stopServer();
+    } else {
+      await this.mcpService.startServer(this.config.store.mcp.port);
     }
+  }
 
-    async toggleServer(): Promise<void> {
-        if (this.isRunning) {
-            await this.mcpService.stopServer();
-        } else {
-            await this.mcpService.startServer(this.config.store.mcp.port);
+  async restartServer(): Promise<void> {
+    await this.mcpService.restartServer();
+  }
+
+  viewLogs(): void {
+    const logs = this.logger.exportLogs();
+    console.log('MCP Logs:', logs);
+    alert('Logs have been printed to the console (Cmd+Option+I)');
+  }
+
+  exportLogsToFile(): void {
+    const logs = this.logger.exportLogs();
+    const json = JSON.stringify(logs, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `mcp-logs-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    this.logger.info('Logs exported to JSON file');
+  }
+
+  clearLogs(): void {
+    this.logger.clearLogs();
+  }
+
+  saveConfig(): void {
+    this.config.save();
+    this.saveMessage = '✓ Settings saved';
+    setTimeout(() => { this.saveMessage = ''; }, 2000);
+  }
+
+  getConfigExample(): string {
+    return JSON.stringify({
+      mcpServers: {
+        'Tabby MCP': {
+          type: 'sse',
+          url: `http://localhost:${this.config.store.mcp?.port || 3001}/sse`
         }
-    }
+      }
+    }, null, 2);
+  }
 
-    async restartServer(): Promise<void> {
-        await this.mcpService.restartServer();
-    }
-
-    viewLogs(): void {
-        const logs = this.logger.exportLogs();
-        console.log('MCP Logs:', logs);
-        alert('Logs have been printed to the console (Cmd+Option+I)');
-    }
-
-    clearLogs(): void {
-        this.logger.clearLogs();
-    }
-
-    getConfigExample(): string {
-        return JSON.stringify({
-            mcpServers: {
-                'Tabby MCP': {
-                    type: 'sse',
-                    url: `http://localhost:${this.config.store.mcp?.port || 3001}/sse`
-                }
-            }
-        }, null, 2);
-    }
-
-    copyConfig(): void {
-        navigator.clipboard.writeText(this.getConfigExample());
-        this.logger.info('Config copied to clipboard');
-    }
+  copyConfig(): void {
+    navigator.clipboard.writeText(this.getConfigExample());
+    this.logger.info('Config copied to clipboard');
+  }
 }
+

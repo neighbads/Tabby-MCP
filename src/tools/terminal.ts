@@ -413,6 +413,7 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
 
     /**
      * Wait for command output between markers
+     * Timing is configurable via Settings → MCP → Timing
      */
     private async waitForCommandOutput(
         session: TerminalSessionWithTab,
@@ -423,7 +424,17 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
     ): Promise<CommandResult> {
         const startTime = Date.now();
         let lastBufferLength = 0;
-        let noChangeCount = 0;
+        let stableCount = 0;
+
+        // Get timing config (with fallback defaults)
+        const timing = this.config.store.mcp?.timing || {};
+        const pollInterval = timing.pollInterval ?? 100;
+        const initialDelay = timing.initialDelay ?? 0;
+
+        // Optional initial delay (configurable, default 0)
+        if (initialDelay > 0) {
+            await new Promise(resolve => setTimeout(resolve, initialDelay));
+        }
 
         while (Date.now() - startTime < timeout) {
             if (isAborted()) {
@@ -432,40 +443,63 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
 
             const buffer = this.getTerminalBufferText(session);
 
-            // Check for markers
-            const startIndex = buffer.lastIndexOf(startMarker);
-            const endIndex = buffer.lastIndexOf(endMarker);
+            // Look for end marker with exit code pattern (complete marker)
+            // End marker format: __MCP_END_<timestamp>__ <exit_code>
+            const endPattern = new RegExp(`${endMarker}\\s+(\\d+)`, 'm');
+            const endMatch = buffer.match(endPattern);
 
-            if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-                const output = buffer.substring(startIndex + startMarker.length, endIndex).trim();
+            if (endMatch) {
+                // Found complete end marker with exit code
+                const endIndex = buffer.indexOf(endMatch[0]);
+                const startIndex = buffer.lastIndexOf(startMarker, endIndex);
 
-                // Extract exit code from end marker
-                const exitCodeMatch = buffer.substring(endIndex).match(new RegExp(`${endMarker}\\s*(\\d+)`));
-                const exitCode = exitCodeMatch ? parseInt(exitCodeMatch[1], 10) : 0;
+                if (startIndex !== -1 && startIndex < endIndex) {
+                    // Extract output between markers
+                    let output = buffer.substring(startIndex + startMarker.length, endIndex).trim();
 
-                return {
-                    success: exitCode === 0,
-                    output,
-                    exitCode
-                };
+                    // Remove command echo (first line often contains the wrapped command)
+                    // Look for the start marker echo line and skip it
+                    const lines = output.split('\n');
+                    if (lines.length > 0 && lines[0].includes(startMarker.slice(0, 10))) {
+                        lines.shift();
+                        output = lines.join('\n').trim();
+                    }
+
+                    const exitCode = parseInt(endMatch[1], 10);
+
+                    return {
+                        success: exitCode === 0,
+                        output,
+                        exitCode
+                    };
+                }
             }
 
-            // Track if buffer is changing (to detect stuck commands)
+            // Track buffer stability (helps detect when output is complete)
             if (buffer.length === lastBufferLength) {
-                noChangeCount++;
+                stableCount++;
             } else {
-                noChangeCount = 0;
+                stableCount = 0;
                 lastBufferLength = buffer.length;
             }
 
-            await new Promise(resolve => setTimeout(resolve, 100));
+            // Wait between checks (configurable via Settings → MCP → Timing)
+            await new Promise(resolve => setTimeout(resolve, pollInterval));
         }
 
         // On timeout, return partial output if start marker found
         const buffer = this.getTerminalBufferText(session);
         const startIndex = buffer.lastIndexOf(startMarker);
         if (startIndex !== -1) {
-            const partialOutput = buffer.substring(startIndex + startMarker.length).trim();
+            let partialOutput = buffer.substring(startIndex + startMarker.length).trim();
+
+            // Clean up command echo
+            const lines = partialOutput.split('\n');
+            if (lines.length > 0 && lines[0].includes('&&')) {
+                lines.shift();
+                partialOutput = lines.join('\n').trim();
+            }
+
             return {
                 success: false,
                 output: partialOutput,
