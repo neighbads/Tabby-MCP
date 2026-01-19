@@ -334,13 +334,18 @@ export class TabManagementToolCategory extends BaseToolCategory {
     private createOpenProfileTool(): McpTool {
         return {
             name: 'open_profile',
-            description: 'Open a new terminal tab using a specific profile (use list_profiles to get available profiles)',
+            description: `Open a new terminal tab using a specific profile.
+Use list_profiles to get available profiles.
+Set waitForReady=true to wait for the terminal/SSH to be fully connected (may take longer).
+Set waitForReady=false (default) for immediate return - use get_session_list to check status later.`,
             schema: {
                 profileId: z.string().optional().describe('ID of the profile to open'),
-                profileName: z.string().optional().describe('Name of the profile to open (if ID not provided)')
+                profileName: z.string().optional().describe('Name of the profile to open (if ID not provided)'),
+                waitForReady: z.boolean().optional().describe('Wait for terminal to be ready (default: false)'),
+                timeout: z.number().optional().describe('Timeout in ms when waitForReady=true (default: 30000)')
             },
-            handler: async (params: { profileId?: string; profileName?: string }) => {
-                const { profileId, profileName } = params;
+            handler: async (params: { profileId?: string; profileName?: string; waitForReady?: boolean; timeout?: number }) => {
+                const { profileId, profileName, waitForReady = false, timeout = 30000 } = params;
 
                 if (!profileId && !profileName) {
                     return {
@@ -370,14 +375,45 @@ export class TabManagementToolCategory extends BaseToolCategory {
                     const tab = await this.profilesService.openNewTabForProfile(profile);
 
                     if (tab) {
+                        const tabIndex = this.app.tabs.indexOf(tab);
+
+                        if (waitForReady) {
+                            // Wait for the terminal to be ready
+                            const startTime = Date.now();
+                            let ready = false;
+
+                            while (Date.now() - startTime < timeout) {
+                                // Check if terminal frontend is available
+                                if ((tab as any).frontend && (tab as any).sessionReady !== false) {
+                                    ready = true;
+                                    break;
+                                }
+                                await new Promise(resolve => setTimeout(resolve, 200));
+                            }
+
+                            this.logger.info(`Opened profile: ${profile.name} (ready: ${ready})`);
+                            return {
+                                content: [{
+                                    type: 'text', text: JSON.stringify({
+                                        success: true,
+                                        ready,
+                                        message: ready ? `Profile ready: ${profile.name}` : `Profile opened but may not be fully connected: ${profile.name}`,
+                                        tabIndex,
+                                        tabTitle: tab.title
+                                    })
+                                }]
+                            };
+                        }
+
                         this.logger.info(`Opened profile: ${profile.name}`);
                         return {
                             content: [{
                                 type: 'text', text: JSON.stringify({
                                     success: true,
                                     message: `Opened profile: ${profile.name}`,
-                                    tabIndex: this.app.tabs.indexOf(tab),
-                                    tabTitle: tab.title
+                                    tabIndex,
+                                    tabTitle: tab.title,
+                                    note: 'Profile opened. Use waitForReady=true or check get_session_list for connection status.'
                                 })
                             }]
                         };

@@ -106,24 +106,52 @@ export class McpService {
         this.app.get('/sse', async (req: Request, res: Response) => {
             this.logger.info('Establishing new SSE connection');
 
+            // Set headers for SSE
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+
             try {
                 const transport = new SSEServerTransport(
                     '/messages',
                     res as unknown as ServerResponse<IncomingMessage>
                 );
 
-                this.logger.info(`New SSE connection: sessionId=${transport.sessionId}`);
-                this.transports[transport.sessionId] = transport;
+                const sessionId = transport.sessionId;
+                this.logger.info(`New SSE connection: sessionId=${sessionId}`);
+                this.transports[sessionId] = transport;
+
+                // Set up heartbeat to keep connection alive
+                const heartbeatInterval = setInterval(() => {
+                    try {
+                        if (!res.writableEnded) {
+                            res.write(': heartbeat\n\n');
+                        }
+                    } catch (e) {
+                        // Connection closed
+                        clearInterval(heartbeatInterval);
+                    }
+                }, 15000); // Send heartbeat every 15 seconds
 
                 res.on('close', () => {
-                    this.logger.info(`SSE connection closed: sessionId=${transport.sessionId}`);
-                    delete this.transports[transport.sessionId];
+                    this.logger.info(`SSE connection closed: sessionId=${sessionId}`);
+                    clearInterval(heartbeatInterval);
+                    delete this.transports[sessionId];
+                });
+
+                res.on('error', (err) => {
+                    this.logger.error(`SSE connection error: sessionId=${sessionId}`, err);
+                    clearInterval(heartbeatInterval);
+                    delete this.transports[sessionId];
                 });
 
                 await this.server.connect(transport);
             } catch (error) {
                 this.logger.error('Failed to establish SSE connection:', error);
-                res.status(500).send('Failed to establish SSE connection');
+                if (!res.headersSent) {
+                    res.status(500).send('Failed to establish SSE connection');
+                }
             }
         });
 

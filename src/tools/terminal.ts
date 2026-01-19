@@ -46,8 +46,10 @@ export class TerminalToolCategory extends BaseToolCategory {
     private initializeTools(): void {
         this.registerTool(this.createGetSessionListTool());
         this.registerTool(this.createExecCommandTool());
+        this.registerTool(this.createSendInputTool());
         this.registerTool(this.createGetTerminalBufferTool());
         this.registerTool(this.createAbortCommandTool());
+        this.registerTool(this.createGetCommandStatusTool());
 
         this.logger.info('Terminal tools initialized');
     }
@@ -58,7 +60,7 @@ export class TerminalToolCategory extends BaseToolCategory {
     private createGetSessionListTool(): McpTool {
         return {
             name: 'get_session_list',
-            description: 'Get list of all terminal sessions/tabs in Tabby',
+            description: 'Get list of all terminal sessions/tabs in Tabby with their status',
             schema: {},
             handler: async () => {
                 const sessions = this.findTerminalSessions();
@@ -66,7 +68,8 @@ export class TerminalToolCategory extends BaseToolCategory {
                     id: s.id,
                     title: s.tab.title || `Terminal ${s.id}`,
                     type: s.tab.constructor.name,
-                    isActive: this.app.activeTab === s.tabParent
+                    isActive: this.app.activeTab === s.tabParent,
+                    hasActiveCommand: this._activeCommands.has(s.id)
                 }));
 
                 this.logger.info(`Found ${result.length} terminal sessions`);
@@ -77,19 +80,23 @@ export class TerminalToolCategory extends BaseToolCategory {
 
     /**
      * Tool: Execute command in terminal
+     * Enhanced with better timeout handling and interactive command detection
      */
     private createExecCommandTool(): McpTool {
         return {
             name: 'exec_command',
-            description: 'Execute a command in a terminal session. Use tabId from get_session_list.',
+            description: `Execute a command in a terminal session. 
+For interactive/paging commands (less, vim, top, etc.), set waitForOutput=false.
+For long-running commands, increase timeout or use waitForOutput=false and poll with get_terminal_buffer.`,
             schema: {
                 command: z.string().describe('Command to execute'),
-                tabId: z.number().optional().describe('Terminal tab ID (default: 0, the first terminal)'),
-                waitForOutput: z.boolean().optional().describe('Wait for command output (default: true)'),
-                timeout: z.number().optional().describe('Timeout in ms (default: 30000)')
+                tabId: z.number().optional().describe('Terminal tab ID (default: 0)'),
+                waitForOutput: z.boolean().optional().describe('Wait for command completion (default: true). Set false for interactive commands.'),
+                timeout: z.number().optional().describe('Timeout in ms (default: 30000, max: 300000)')
             },
             handler: async (params: { command: string; tabId?: number; waitForOutput?: boolean; timeout?: number }) => {
-                const { command, tabId = 0, waitForOutput = true, timeout = 30000 } = params;
+                const { command, tabId = 0, waitForOutput = true, timeout: rawTimeout = 30000 } = params;
+                const timeout = Math.min(rawTimeout, 300000); // Max 5 minutes
 
                 // Check pair programming mode
                 if (this.config.store.mcp?.pairProgrammingMode?.enabled) {
@@ -118,16 +125,32 @@ export class TerminalToolCategory extends BaseToolCategory {
                         this.app.selectTab(session.tabParent);
                     }
 
+                    // For non-waiting mode, just send the command
+                    if (!waitForOutput) {
+                        session.tab.sendInput(command + '\n');
+                        this.logger.info(`Sent command (async): ${command} in tab ${tabId}`);
+                        return {
+                            content: [{
+                                type: 'text', text: JSON.stringify({
+                                    success: true,
+                                    message: 'Command sent (not waiting for output)',
+                                    hint: 'Use get_terminal_buffer to check output, or send_input for interactive commands'
+                                })
+                            }]
+                        };
+                    }
+
                     // Generate unique markers
-                    const startMarker = `__MCP_START_${Date.now()}__`;
-                    const endMarker = `__MCP_END_${Date.now()}__`;
+                    const timestamp = Date.now();
+                    const startMarker = `__MCP_START_${timestamp}__`;
+                    const endMarker = `__MCP_END_${timestamp}__`;
 
                     // Track active command
                     let aborted = false;
                     const activeCommand: ActiveCommand = {
                         tabId,
                         command,
-                        timestamp: Date.now(),
+                        timestamp,
                         startMarker,
                         endMarker,
                         abort: () => { aborted = true; }
@@ -140,12 +163,6 @@ export class TerminalToolCategory extends BaseToolCategory {
                     session.tab.sendInput(wrappedCommand + '\n');
 
                     this.logger.info(`Executing command: ${command} in tab ${tabId}`);
-
-                    if (!waitForOutput) {
-                        return {
-                            content: [{ type: 'text', text: JSON.stringify({ success: true, output: 'Command sent (not waiting for output)' }) }]
-                        };
-                    }
 
                     // Wait for output
                     const result = await this.waitForCommandOutput(session, startMarker, endMarker, timeout, () => aborted);
@@ -169,19 +186,61 @@ export class TerminalToolCategory extends BaseToolCategory {
     }
 
     /**
+     * Tool: Send raw input to terminal (for interactive commands)
+     */
+    private createSendInputTool(): McpTool {
+        return {
+            name: 'send_input',
+            description: `Send raw input to a terminal. Use this for interactive commands like vim, less, top, etc.
+Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
+            schema: {
+                input: z.string().describe('Input to send (can include special characters like \\n, \\x03 for Ctrl+C)'),
+                tabId: z.number().optional().describe('Terminal tab ID (default: 0)')
+            },
+            handler: async (params: { input: string; tabId?: number }) => {
+                const { input, tabId = 0 } = params;
+
+                const sessions = this.findTerminalSessions();
+                const session = sessions.find(s => s.id === tabId);
+
+                if (!session) {
+                    return {
+                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: `No terminal found with tabId ${tabId}` }) }]
+                    };
+                }
+
+                // Process escape sequences
+                const processedInput = input
+                    .replace(/\\n/g, '\n')
+                    .replace(/\\r/g, '\r')
+                    .replace(/\\t/g, '\t')
+                    .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+                session.tab.sendInput(processedInput);
+                this.logger.info(`Sent input to tab ${tabId}: ${input.substring(0, 50)}${input.length > 50 ? '...' : ''}`);
+
+                return {
+                    content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Input sent' }) }]
+                };
+            }
+        };
+    }
+
+    /**
      * Tool: Get terminal buffer content
      */
     private createGetTerminalBufferTool(): McpTool {
         return {
             name: 'get_terminal_buffer',
-            description: 'Get the content of a terminal buffer',
+            description: 'Get the content of a terminal buffer. Use this to check command output after using send_input or async exec_command.',
             schema: {
                 tabId: z.number().optional().describe('Terminal tab ID (default: 0)'),
-                startLine: z.number().optional().describe('Start line (default: 0)'),
-                endLine: z.number().optional().describe('End line (default: all)')
+                lastNLines: z.number().optional().describe('Get only the last N lines (default: all)'),
+                startLine: z.number().optional().describe('Start line (0-indexed)'),
+                endLine: z.number().optional().describe('End line (exclusive)')
             },
-            handler: async (params: { tabId?: number; startLine?: number; endLine?: number }) => {
-                const { tabId = 0, startLine, endLine } = params;
+            handler: async (params: { tabId?: number; lastNLines?: number; startLine?: number; endLine?: number }) => {
+                const { tabId = 0, lastNLines, startLine, endLine } = params;
 
                 const sessions = this.findTerminalSessions();
                 const session = sessions.find(s => s.id === tabId);
@@ -195,9 +254,14 @@ export class TerminalToolCategory extends BaseToolCategory {
                 const bufferContent = this.getTerminalBufferText(session);
                 const lines = bufferContent.split('\n');
 
-                const start = startLine ?? 0;
-                const end = endLine ?? lines.length;
-                const selectedLines = lines.slice(start, end);
+                let selectedLines: string[];
+                if (lastNLines !== undefined) {
+                    selectedLines = lines.slice(-lastNLines);
+                } else {
+                    const start = startLine ?? 0;
+                    const end = endLine ?? lines.length;
+                    selectedLines = lines.slice(start, end);
+                }
 
                 return {
                     content: [{
@@ -205,8 +269,7 @@ export class TerminalToolCategory extends BaseToolCategory {
                             success: true,
                             tabId,
                             totalLines: lines.length,
-                            startLine: start,
-                            endLine: end,
+                            returnedLines: selectedLines.length,
                             content: selectedLines.join('\n')
                         })
                     }]
@@ -248,7 +311,36 @@ export class TerminalToolCategory extends BaseToolCategory {
                 session.tab.sendInput('\x03');
 
                 this.logger.info(`Aborted command in tab ${tabId}`);
-                return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Command aborted' }) }] };
+                return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Ctrl+C sent' }) }] };
+            }
+        };
+    }
+
+    /**
+     * Tool: Get status of active commands
+     */
+    private createGetCommandStatusTool(): McpTool {
+        return {
+            name: 'get_command_status',
+            description: 'Get the status of active/running commands across all terminals',
+            schema: {},
+            handler: async () => {
+                const activeCommands = Array.from(this._activeCommands.entries()).map(([tabId, cmd]) => ({
+                    tabId,
+                    command: cmd.command,
+                    startedAt: new Date(cmd.timestamp).toISOString(),
+                    runningFor: `${Math.round((Date.now() - cmd.timestamp) / 1000)}s`
+                }));
+
+                return {
+                    content: [{
+                        type: 'text', text: JSON.stringify({
+                            success: true,
+                            activeCommands,
+                            count: activeCommands.length
+                        }, null, 2)
+                    }]
+                };
             }
         };
     }
@@ -330,6 +422,8 @@ export class TerminalToolCategory extends BaseToolCategory {
         isAborted: () => boolean
     ): Promise<CommandResult> {
         const startTime = Date.now();
+        let lastBufferLength = 0;
+        let noChangeCount = 0;
 
         while (Date.now() - startTime < timeout) {
             if (isAborted()) {
@@ -337,6 +431,8 @@ export class TerminalToolCategory extends BaseToolCategory {
             }
 
             const buffer = this.getTerminalBufferText(session);
+
+            // Check for markers
             const startIndex = buffer.lastIndexOf(startMarker);
             const endIndex = buffer.lastIndexOf(endMarker);
 
@@ -354,7 +450,28 @@ export class TerminalToolCategory extends BaseToolCategory {
                 };
             }
 
+            // Track if buffer is changing (to detect stuck commands)
+            if (buffer.length === lastBufferLength) {
+                noChangeCount++;
+            } else {
+                noChangeCount = 0;
+                lastBufferLength = buffer.length;
+            }
+
             await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        // On timeout, return partial output if start marker found
+        const buffer = this.getTerminalBufferText(session);
+        const startIndex = buffer.lastIndexOf(startMarker);
+        if (startIndex !== -1) {
+            const partialOutput = buffer.substring(startIndex + startMarker.length).trim();
+            return {
+                success: false,
+                output: partialOutput,
+                error: 'Command timeout (partial output captured)',
+                exitCode: -1
+            };
         }
 
         return { success: false, output: '', error: 'Command timeout' };

@@ -137,7 +137,7 @@ npm run build
 
 ## 🔌 Connecting AI Clients
 
-### Cursor / Windsurf
+### SSE Mode (Cursor / Windsurf)
 
 Add to `~/.cursor/mcp.json`:
 
@@ -152,7 +152,43 @@ Add to `~/.cursor/mcp.json`:
 }
 ```
 
-### Other Clients
+### STDIO Mode (Claude Desktop / VS Code)
+
+For clients that don't support SSE, use the STDIO bridge:
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "tabby-mcp": {
+      "command": "node",
+      "args": ["/path/to/Tabby-MCP/scripts/stdio-bridge.js"]
+    }
+  }
+}
+```
+
+**VS Code / Other IDEs:**
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "tabby-mcp": {
+        "type": "stdio",
+        "command": "node",
+        "args": ["scripts/stdio-bridge.js"],
+        "cwd": "/path/to/Tabby-MCP"
+      }
+    }
+  }
+}
+```
+
+> **Note**: STDIO mode requires Node.js installed. The bridge script connects to the SSE server running in Tabby.
+
+### Endpoints
 
 | Endpoint | URL |
 |----------|-----|
