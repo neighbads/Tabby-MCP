@@ -12,7 +12,7 @@
 
 **A Comprehensive MCP Server Plugin for Tabby Terminal**
 
-*Connect AI assistants to your terminal with full control capabilities — 21 MCP tools included*
+*Connect AI assistants to your terminal with full control — 34 MCP tools including SFTP support*
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -28,6 +28,7 @@
 
 ### 🖥️ Terminal Control
 - Execute commands with output capture
+- **Stable session IDs** (v1.1+)
 - Send interactive input (vim, less, top)
 - Read terminal buffer content
 - Abort/monitor running commands
@@ -37,6 +38,7 @@
 
 ### 📑 Tab Management
 - Create/Close/Duplicate tabs
+- **Split panes** (horizontal/vertical)
 - Navigate between tabs
 - Move tabs left/right
 - Reopen closed tabs
@@ -46,7 +48,7 @@
 <tr>
 <td>
 
-### 🔗 Profile Management
+### 🔗 Profile & SSH
 - List all terminal profiles
 - Open new tabs with profiles
 - SSH quick connect
@@ -55,9 +57,19 @@
 </td>
 <td>
 
+### 📁 SFTP Operations (v1.1+)
+- List/read/write remote files
+- Create/delete directories
+- Rename/move files
+- *(Requires tabby-ssh)*
+
+</td>
+</tr>
+<tr>
+<td colspan="2">
+
 ### 🔒 Security Features
-- Pair programming mode
-- Command confirmation dialogs
+- Pair programming mode with confirmation dialogs
 - Comprehensive logging
 - Safe command execution
 
@@ -157,7 +169,7 @@ Add to `~/.cursor/mcp.json`:
   "mcpServers": {
     "Tabby MCP": {
       "type": "sse",
-      "url": "http://localhost:3001/sse"
+      "url": "http://localhost:3001/mcp"
     }
   }
 }
@@ -201,39 +213,49 @@ For clients that don't support SSE, use the STDIO bridge:
 
 ### Endpoints
 
-| Endpoint | URL |
-|----------|-----|
-| SSE | `http://localhost:3001/sse` |
-| Health | `http://localhost:3001/health` |
-| Info | `http://localhost:3001/info` |
+| Endpoint | URL | Protocol |
+|----------|-----|----------|
+| Streamable HTTP | `http://localhost:3001/mcp` | 2025-03-26 (recommended) |
+| Legacy SSE | `http://localhost:3001/sse` | 2024-11-05 |
+| Health | `http://localhost:3001/health` | - |
+| Info | `http://localhost:3001/info` | - |
 
 ---
 
 ## 🛠️ Available Tools
 
-### Terminal Control (6)
+### Terminal Control (7)
 
 | Tool | Description |
 |------|-------------|
-| `get_session_list` | List all terminal sessions |
-| `exec_command` | Execute command with output |
+| `get_session_list` | List all terminal sessions with **stable UUIDs** and metadata |
+| `exec_command` | Execute command with flexible session targeting |
 | `send_input` | Send interactive input (Ctrl+C, etc) |
-| `get_terminal_buffer` | Read terminal buffer |
+| `get_terminal_buffer` | Read terminal buffer (defaults to active session) |
 | `abort_command` | Abort running command |
 | `get_command_status` | Monitor active commands |
+| `focus_pane` | Focus a specific pane in split view |
 
-### Tab Management (10)
+> **New in v1.1**: All terminal tools now support flexible session targeting:
+> - `sessionId` (stable UUID, recommended)
+> - `tabIndex` (legacy, may change)
+> - `title` (partial match)
+> - `profileName` (partial match)
+> - No parameters = use active session
+
+### Tab Management (11)
 
 | Tool | Description |
 |------|-------------|
-| `list_tabs` | List all open tabs |
-| `select_tab` | Focus a specific tab |
+| `list_tabs` | List all open tabs with **stable IDs** |
+| `select_tab` | Focus a specific tab (defaults to active) |
 | `close_tab` | Close a tab |
 | `close_all_tabs` | Close all tabs |
 | `duplicate_tab` | Duplicate a tab |
 | `next_tab` / `previous_tab` | Navigate tabs |
 | `move_tab_left` / `move_tab_right` | Reorder tabs |
 | `reopen_last_tab` | Reopen closed tab |
+| `split_tab` | Split current tab (horizontal/vertical) |
 
 ### Profile Management (4)
 
@@ -244,6 +266,36 @@ For clients that don't support SSE, use the STDIO bridge:
 | `show_profile_selector` | Show profile dialog |
 | `quick_connect` | SSH quick connect |
 
+### SFTP Operations (12) 🆕
+
+> Requires `tabby-ssh` plugin. If not installed, SFTP tools are disabled automatically.
+
+**Basic Operations:**
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `sftp_list_files` | List remote directory | `path` |
+| `sftp_read_file` | Read remote file (text) | `path` |
+| `sftp_write_file` | Write text to remote file | `path`, `content` |
+| `sftp_mkdir` | Create remote directory | `path` |
+| `sftp_delete` | Delete remote file/directory | `path` |
+| `sftp_rename` | Rename/move remote file | `sourcePath`, `destPath` |
+| `sftp_stat` | Get file/directory info | `path` |
+
+**File Transfer (supports sync/async):**
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `sftp_upload` | Upload local file → remote | `localPath`, `remotePath`, `sync` |
+| `sftp_download` | Download remote → local file | `remotePath`, `localPath`, `sync` |
+| `sftp_get_transfer_status` | Query transfer progress | `transferId` |
+| `sftp_list_transfers` | List all transfers | `status` (filter) |
+| `sftp_cancel_transfer` | Cancel active transfer | `transferId` |
+
+> **Transfer Modes**: `sync=true` (default) waits for completion. `sync=false` returns immediately with `transferId`.
+> 
+> **Size Limits**: Configurable in Settings → MCP → SFTP.
+
 ---
 
 ## ⚙️ Configuration
@@ -253,6 +305,8 @@ For clients that don't support SSE, use the STDIO bridge:
 | Port | MCP server port | 3001 |
 | Start on Boot | Auto-start server | true |
 | Pair Programming | Confirm commands | true |
+| Session Tracking | Use stable UUIDs | true |
+| SFTP Enabled | Enable SFTP tools | true |
 
 ---
 
@@ -287,11 +341,36 @@ This project builds upon the work of [tabby-mcp-server](https://github.com/thuan
 
 | Feature | Original | This Project |
 |---------|----------|--------------|
-| MCP Tools | 4 | **18** |
+| MCP Tools | 4 | **34** |
 | Tab Management | ❌ | ✅ |
 | Profile/SSH | ❌ | ✅ |
+| SFTP Support | ❌ | ✅ |
+| Stable Session IDs | ❌ | ✅ |
+| Streamable HTTP | ❌ | ✅ |
 | Init Bug | Has issue | ✅ Fixed |
 | Install Script | Manual | ✅ One-liner |
+
+---
+
+## 📝 Changelog
+
+### v1.1.0 (2026-01-20)
+
+**Major Fixes:**
+- **SFTP tools completely rewritten** - Fixed all SFTP tools that were returning "No SSH session found"
+- Fixed SSH tab detection to properly handle tabs inside `SplitTabComponent`
+- Fixed `get_terminal_buffer` and `select_tab` returning error when called without parameters
+- Fixed `select_tab` tool not finding tabs by tabId (bidirectional lookup)
+- Fixed `quick_connect` and `open_profile` parameter validation issues
+
+**Improvements:**
+- All tools now use smart defaults: no parameters = use active session/tab/first SSH session
+- Updated documentation: tool count corrected to 34 (Terminal 7 + Tab 11 + Profile 4 + SFTP 12)
+- Added detailed debug logging and better error messages
+- Added `focus_pane` and `split_tab` to documentation
+- Added Streamable HTTP transport support (protocol 2025-03-26)
+- Settings: SFTP size limits now use MB instead of bytes
+- Settings: Updated SFTP notes (removed outdated base64 warning)
 
 ---
 

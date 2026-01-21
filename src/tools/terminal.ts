@@ -7,26 +7,40 @@ import { z } from 'zod';
 import { BaseToolCategory } from './base-tool-category';
 import { McpLoggerService } from '../services/mcpLogger.service';
 import { DialogService } from '../services/dialog.service';
-import { McpTool, ActiveCommand, TerminalSession, CommandResult } from '../types/types';
+import { McpTool, ActiveCommand, CommandResult, EnhancedTerminalSession, SessionLocator } from '../types/types';
 
 /**
- * Terminal session with ID for tracking
+ * Terminal session with stable ID for tracking
+ * Enhanced to support split pane identification
  */
 export interface TerminalSessionWithTab {
-    id: number;
-    tabParent: BaseTabComponent;
-    tab: BaseTerminalTabComponent;
+    sessionId: string;        // Stable UUID (unique per pane)
+    tabIndex: number;         // Global index across all panes
+    tabParent: BaseTabComponent;  // The actual tab (may be SplitTabComponent)
+    tab: BaseTerminalTabComponent;  // The terminal component
+
+    // Split pane information
+    isSplit: boolean;         // Is this pane inside a SplitTabComponent?
+    splitTabIndex?: number;   // Index of the parent SplitTabComponent in app.tabs
+    paneIndex?: number;       // Index within the SplitTabComponent (0, 1, 2, ...)
+    totalPanes?: number;      // Total panes in the split
+    isFocusedPane?: boolean;  // Is this the focused pane in the split?
 }
 
 /**
  * Terminal Tools Category - Commands for terminal control
+ * Enhanced with stable session IDs and flexible session targeting
  */
 @Injectable({ providedIn: 'root' })
 export class TerminalToolCategory extends BaseToolCategory {
     name = 'terminal';
 
-    private _activeCommands = new Map<number, ActiveCommand>();
-    private _activeCommandsSubject = new BehaviorSubject<Map<number, ActiveCommand>>(new Map());
+    // Session registry for stable IDs (UUID per tab)
+    private tabToSessionId = new WeakMap<BaseTerminalTabComponent, string>();
+
+    // Active commands tracked by sessionId
+    private _activeCommands = new Map<string, ActiveCommand>();
+    private _activeCommandsSubject = new BehaviorSubject<Map<string, ActiveCommand>>(new Map());
 
     public readonly activeCommands$ = this._activeCommandsSubject.asObservable();
 
@@ -50,27 +64,123 @@ export class TerminalToolCategory extends BaseToolCategory {
         this.registerTool(this.createGetTerminalBufferTool());
         this.registerTool(this.createAbortCommandTool());
         this.registerTool(this.createGetCommandStatusTool());
+        this.registerTool(this.createFocusPaneTool());
 
         this.logger.info('Terminal tools initialized');
     }
 
     /**
-     * Tool: Get list of terminal sessions
+     * Get or create a stable session ID for a tab
+     */
+    private getOrCreateSessionId(tab: BaseTerminalTabComponent): string {
+        let sessionId = this.tabToSessionId.get(tab);
+        if (!sessionId) {
+            // Generate UUID
+            sessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+            this.tabToSessionId.set(tab, sessionId);
+        }
+        return sessionId;
+    }
+
+    /**
+     * Find session by flexible locator
+     * Priority: sessionId > tabIndex > title > profileName
+     * If no locator is provided, returns the currently active/focused session
+     */
+    public findSessionByLocator(locator: SessionLocator): TerminalSessionWithTab | null {
+        const sessions = this.findTerminalSessions();
+
+        // If no locator parameters provided, return the currently active session
+        if (!locator.sessionId && locator.tabIndex === undefined && !locator.title && !locator.profileName) {
+            // First try to find the focused pane in a split
+            const focusedSession = sessions.find(s => s.isFocusedPane === true);
+            if (focusedSession) return focusedSession;
+
+            // Otherwise return the first session (most recently used)
+            return sessions[0] || null;
+        }
+
+        // Priority 1: sessionId (stable, recommended)
+        if (locator.sessionId) {
+            const found = sessions.find(s => s.sessionId === locator.sessionId);
+            if (found) return found;
+        }
+
+        // Priority 2: tabIndex (legacy, may change)
+        if (locator.tabIndex !== undefined) {
+            const found = sessions.find(s => s.tabIndex === locator.tabIndex);
+            if (found) return found;
+        }
+
+        // Priority 3: title (partial, case-insensitive)
+        if (locator.title) {
+            const titleLower = locator.title.toLowerCase();
+            const found = sessions.find(s =>
+                s.tab.title?.toLowerCase().includes(titleLower)
+            );
+            if (found) return found;
+        }
+
+        // Priority 4: profileName (partial, case-insensitive)
+        if (locator.profileName) {
+            const nameLower = locator.profileName.toLowerCase();
+            const found = sessions.find(s => {
+                const profile = (s.tab as any).profile;
+                return profile?.name?.toLowerCase().includes(nameLower);
+            });
+            if (found) return found;
+        }
+
+        return null;
+    }
+
+    /**
+     * Tool: Get list of terminal sessions with enhanced metadata
+     * Now includes detailed split pane information
      */
     private createGetSessionListTool(): McpTool {
         return {
             name: 'get_session_list',
-            description: 'Get list of all terminal sessions/tabs in Tabby with their status',
-            schema: {},
+            description: `Get list of all terminal sessions with stable IDs and metadata.
+Use sessionId (stable UUID) for reliable session targeting.
+
+For split panes:
+- isSplit: true if this session is inside a split tab
+- splitTabIndex: Index of parent tab (use for grouping panes)
+- paneIndex: Position within the split (0, 1, 2, ...)
+- totalPanes: Number of panes in the split
+- isFocusedPane: Whether this is the currently focused pane`,
+            schema: z.object({}),
             handler: async () => {
                 const sessions = this.findTerminalSessions();
-                const result: TerminalSession[] = sessions.map(s => ({
-                    id: s.id,
-                    title: s.tab.title || `Terminal ${s.id}`,
-                    type: s.tab.constructor.name,
-                    isActive: this.app.activeTab === s.tabParent,
-                    hasActiveCommand: this._activeCommands.has(s.id)
-                }));
+                const result = sessions.map(s => {
+                    const tabAny = s.tab as any;
+                    return {
+                        sessionId: s.sessionId,
+                        tabIndex: s.tabIndex,
+                        title: s.tab.title || `Terminal ${s.tabIndex}`,
+                        type: s.tab.constructor.name,
+                        isActive: this.app.activeTab === s.tabParent,
+                        hasActiveCommand: this._activeCommands.has(s.sessionId),
+                        profile: tabAny.profile ? {
+                            id: tabAny.profile.id,
+                            name: tabAny.profile.name,
+                            type: tabAny.profile.type
+                        } : undefined,
+                        pid: tabAny.session?.pty?.pid,
+                        cwd: tabAny.session?.cwd,
+                        // Split pane information
+                        isSplit: s.isSplit,
+                        splitTabIndex: s.splitTabIndex,
+                        paneIndex: s.paneIndex,
+                        totalPanes: s.totalPanes,
+                        isFocusedPane: s.isFocusedPane
+                    };
+                });
 
                 this.logger.info(`Found ${result.length} terminal sessions`);
                 return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
@@ -80,43 +190,66 @@ export class TerminalToolCategory extends BaseToolCategory {
 
     /**
      * Tool: Execute command in terminal
-     * Enhanced with better timeout handling and interactive command detection
+     * Enhanced with flexible session targeting
      */
     private createExecCommandTool(): McpTool {
         return {
             name: 'exec_command',
-            description: `Execute a command in a terminal session. 
-For interactive/paging commands (less, vim, top, etc.), set waitForOutput=false.
+            description: `Execute a command in a terminal session.
+Session targeting (priority order): sessionId > tabIndex > title > profileName
+- sessionId: Stable UUID (recommended, use get_session_list to get IDs)
+- tabIndex: Array index (legacy, may change if tabs are reordered)
+- title: Match by terminal title (partial, case-insensitive)
+- profileName: Match by profile name (partial, case-insensitive)
+
+For interactive/paging commands (less, vim, top), set waitForOutput=false.
 For long-running commands, increase timeout or use waitForOutput=false and poll with get_terminal_buffer.`,
-            schema: {
+            schema: z.object({
                 command: z.string().describe('Command to execute'),
-                tabId: z.number().optional().describe('Terminal tab ID (default: 0)'),
+                sessionId: z.string().optional().describe('Stable session ID (recommended, from get_session_list)'),
+                tabIndex: z.number().optional().describe('Tab index (legacy, may change if tabs reorder)'),
+                title: z.string().optional().describe('Match session by title (partial, case-insensitive)'),
+                profileName: z.string().optional().describe('Match session by profile name (partial, case-insensitive)'),
                 waitForOutput: z.boolean().optional().describe('Wait for command completion (default: true). Set false for interactive commands.'),
                 timeout: z.number().optional().describe('Timeout in ms (default: 30000, max: 300000)')
-            },
-            handler: async (params: { command: string; tabId?: number; waitForOutput?: boolean; timeout?: number }) => {
-                const { command, tabId = 0, waitForOutput = true, timeout: rawTimeout = 30000 } = params;
+            }),
+            handler: async (params: {
+                command: string;
+                sessionId?: string;
+                tabIndex?: number;
+                title?: string;
+                profileName?: string;
+                waitForOutput?: boolean;
+                timeout?: number;
+            }) => {
+                const { command, sessionId, tabIndex, title, profileName, waitForOutput = true, timeout: rawTimeout = 30000 } = params;
                 const timeout = Math.min(rawTimeout, 300000); // Max 5 minutes
+
+                // Find session using locator
+                const session = this.findSessionByLocator({ sessionId, tabIndex, title, profileName });
+
+                if (!session) {
+                    return {
+                        content: [{
+                            type: 'text', text: JSON.stringify({
+                                success: false,
+                                error: 'No matching terminal session found',
+                                hint: 'Use get_session_list to see available sessions with their sessionIds'
+                            })
+                        }]
+                    };
+                }
 
                 // Check pair programming mode
                 if (this.config.store.mcp?.pairProgrammingMode?.enabled) {
                     if (this.config.store.mcp?.pairProgrammingMode?.showConfirmationDialog) {
-                        const confirmed = await this.dialogService.showCommandConfirmation(command, tabId);
+                        const confirmed = await this.dialogService.showCommandConfirmation(command, session.tabIndex);
                         if (!confirmed) {
                             return {
                                 content: [{ type: 'text', text: JSON.stringify({ success: false, error: 'Command rejected by user' }) }]
                             };
                         }
                     }
-                }
-
-                const sessions = this.findTerminalSessions();
-                const session = sessions.find(s => s.id === tabId);
-
-                if (!session) {
-                    return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: `No terminal found with tabId ${tabId}` }) }]
-                    };
                 }
 
                 try {
@@ -128,13 +261,14 @@ For long-running commands, increase timeout or use waitForOutput=false and poll 
                     // For non-waiting mode, just send the command
                     if (!waitForOutput) {
                         session.tab.sendInput(command + '\n');
-                        this.logger.info(`Sent command (async): ${command} in tab ${tabId}`);
+                        this.logger.info(`Sent command (async): ${command} in session ${session.sessionId}`);
                         return {
                             content: [{
                                 type: 'text', text: JSON.stringify({
                                     success: true,
+                                    sessionId: session.sessionId,
                                     message: 'Command sent (not waiting for output)',
-                                    hint: 'Use get_terminal_buffer to check output, or send_input for interactive commands'
+                                    hint: 'Use get_terminal_buffer with same sessionId to check output'
                                 })
                             }]
                         };
@@ -148,32 +282,33 @@ For long-running commands, increase timeout or use waitForOutput=false and poll 
                     // Track active command
                     let aborted = false;
                     const activeCommand: ActiveCommand = {
-                        tabId,
+                        tabId: session.tabIndex,
                         command,
                         timestamp,
                         startMarker,
                         endMarker,
                         abort: () => { aborted = true; }
                     };
-                    this._activeCommands.set(tabId, activeCommand);
+                    this._activeCommands.set(session.sessionId, activeCommand);
                     this._activeCommandsSubject.next(new Map(this._activeCommands));
 
                     // Send command with markers
                     const wrappedCommand = `echo "${startMarker}" && ${command} ; echo "${endMarker} $?"`;
                     session.tab.sendInput(wrappedCommand + '\n');
 
-                    this.logger.info(`Executing command: ${command} in tab ${tabId}`);
+                    this.logger.info(`Executing command: ${command} in session ${session.sessionId}`);
 
                     // Wait for output
                     const result = await this.waitForCommandOutput(session, startMarker, endMarker, timeout, () => aborted);
 
                     // Clean up active command
-                    this._activeCommands.delete(tabId);
+                    this._activeCommands.delete(session.sessionId);
                     this._activeCommandsSubject.next(new Map(this._activeCommands));
 
-                    return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+                    // Add sessionId to result for reference
+                    return { content: [{ type: 'text', text: JSON.stringify({ ...result, sessionId: session.sessionId }) }] };
                 } catch (error: any) {
-                    this._activeCommands.delete(tabId);
+                    this._activeCommands.delete(session.sessionId);
                     this._activeCommandsSubject.next(new Map(this._activeCommands));
 
                     this.logger.error('Command execution error:', error);
@@ -192,20 +327,29 @@ For long-running commands, increase timeout or use waitForOutput=false and poll 
         return {
             name: 'send_input',
             description: `Send raw input to a terminal. Use this for interactive commands like vim, less, top, etc.
+Session targeting: sessionId (recommended) > tabIndex > title > profileName
 Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
-            schema: {
+            schema: z.object({
                 input: z.string().describe('Input to send (can include special characters like \\n, \\x03 for Ctrl+C)'),
-                tabId: z.number().optional().describe('Terminal tab ID (default: 0)')
-            },
-            handler: async (params: { input: string; tabId?: number }) => {
-                const { input, tabId = 0 } = params;
+                sessionId: z.string().optional().describe('Stable session ID (recommended)'),
+                tabIndex: z.number().optional().describe('Tab index (legacy)'),
+                title: z.string().optional().describe('Match by title'),
+                profileName: z.string().optional().describe('Match by profile name')
+            }),
+            handler: async (params: { input: string; sessionId?: string; tabIndex?: number; title?: string; profileName?: string }) => {
+                const { input, sessionId, tabIndex, title, profileName } = params;
 
-                const sessions = this.findTerminalSessions();
-                const session = sessions.find(s => s.id === tabId);
+                const session = this.findSessionByLocator({ sessionId, tabIndex, title, profileName });
 
                 if (!session) {
                     return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: `No terminal found with tabId ${tabId}` }) }]
+                        content: [{
+                            type: 'text', text: JSON.stringify({
+                                success: false,
+                                error: 'No matching terminal session found',
+                                hint: 'Use get_session_list to see available sessions'
+                            })
+                        }]
                     };
                 }
 
@@ -217,10 +361,10 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
                     .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 
                 session.tab.sendInput(processedInput);
-                this.logger.info(`Sent input to tab ${tabId}: ${input.substring(0, 50)}${input.length > 50 ? '...' : ''}`);
+                this.logger.info(`Sent input to session ${session.sessionId}: ${input.substring(0, 50)}${input.length > 50 ? '...' : ''}`);
 
                 return {
-                    content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Input sent' }) }]
+                    content: [{ type: 'text', text: JSON.stringify({ success: true, sessionId: session.sessionId, message: 'Input sent' }) }]
                 };
             }
         };
@@ -232,22 +376,39 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
     private createGetTerminalBufferTool(): McpTool {
         return {
             name: 'get_terminal_buffer',
-            description: 'Get the content of a terminal buffer. Use this to check command output after using send_input or async exec_command.',
-            schema: {
-                tabId: z.number().optional().describe('Terminal tab ID (default: 0)'),
+            description: `Get the content of a terminal buffer. Use this to check command output after using send_input or async exec_command.
+Session targeting: sessionId (recommended) > tabIndex > title > profileName`,
+            schema: z.object({
+                sessionId: z.string().optional().describe('Stable session ID (recommended)'),
+                tabIndex: z.number().optional().describe('Tab index (legacy)'),
+                title: z.string().optional().describe('Match by title'),
+                profileName: z.string().optional().describe('Match by profile name'),
                 lastNLines: z.number().optional().describe('Get only the last N lines (default: all)'),
                 startLine: z.number().optional().describe('Start line (0-indexed)'),
                 endLine: z.number().optional().describe('End line (exclusive)')
-            },
-            handler: async (params: { tabId?: number; lastNLines?: number; startLine?: number; endLine?: number }) => {
-                const { tabId = 0, lastNLines, startLine, endLine } = params;
+            }),
+            handler: async (params: {
+                sessionId?: string;
+                tabIndex?: number;
+                title?: string;
+                profileName?: string;
+                lastNLines?: number;
+                startLine?: number;
+                endLine?: number;
+            }) => {
+                const { sessionId, tabIndex, title, profileName, lastNLines, startLine, endLine } = params;
 
-                const sessions = this.findTerminalSessions();
-                const session = sessions.find(s => s.id === tabId);
+                const session = this.findSessionByLocator({ sessionId, tabIndex, title, profileName });
 
                 if (!session) {
                     return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: `No terminal found with tabId ${tabId}` }) }]
+                        content: [{
+                            type: 'text', text: JSON.stringify({
+                                success: false,
+                                error: 'No matching terminal session found',
+                                hint: 'Use get_session_list to see available sessions'
+                            })
+                        }]
                     };
                 }
 
@@ -267,7 +428,8 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
                     content: [{
                         type: 'text', text: JSON.stringify({
                             success: true,
-                            tabId,
+                            sessionId: session.sessionId,
+                            tabIndex: session.tabIndex,
                             totalLines: lines.length,
                             returnedLines: selectedLines.length,
                             content: selectedLines.join('\n')
@@ -284,34 +446,42 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
     private createAbortCommandTool(): McpTool {
         return {
             name: 'abort_command',
-            description: 'Abort a running command by sending Ctrl+C',
-            schema: {
-                tabId: z.number().optional().describe('Terminal tab ID (default: 0)')
-            },
-            handler: async (params: { tabId?: number }) => {
-                const { tabId = 0 } = params;
+            description: `Abort a running command by sending Ctrl+C.
+Session targeting: sessionId (recommended) > tabIndex > title > profileName`,
+            schema: z.object({
+                sessionId: z.string().optional().describe('Stable session ID (recommended)'),
+                tabIndex: z.number().optional().describe('Tab index (legacy)'),
+                title: z.string().optional().describe('Match by title'),
+                profileName: z.string().optional().describe('Match by profile name')
+            }),
+            handler: async (params: { sessionId?: string; tabIndex?: number; title?: string; profileName?: string }) => {
+                const { sessionId, tabIndex, title, profileName } = params;
 
-                const sessions = this.findTerminalSessions();
-                const session = sessions.find(s => s.id === tabId);
+                const session = this.findSessionByLocator({ sessionId, tabIndex, title, profileName });
 
                 if (!session) {
                     return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: `No terminal found with tabId ${tabId}` }) }]
+                        content: [{
+                            type: 'text', text: JSON.stringify({
+                                success: false,
+                                error: 'No matching terminal session found'
+                            })
+                        }]
                     };
                 }
 
-                const activeCommand = this._activeCommands.get(tabId);
+                const activeCommand = this._activeCommands.get(session.sessionId);
                 if (activeCommand) {
                     activeCommand.abort();
-                    this._activeCommands.delete(tabId);
+                    this._activeCommands.delete(session.sessionId);
                     this._activeCommandsSubject.next(new Map(this._activeCommands));
                 }
 
                 // Send Ctrl+C
                 session.tab.sendInput('\x03');
 
-                this.logger.info(`Aborted command in tab ${tabId}`);
-                return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Ctrl+C sent' }) }] };
+                this.logger.info(`Aborted command in session ${session.sessionId}`);
+                return { content: [{ type: 'text', text: JSON.stringify({ success: true, sessionId: session.sessionId, message: 'Ctrl+C sent' }) }] };
             }
         };
     }
@@ -323,10 +493,11 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
         return {
             name: 'get_command_status',
             description: 'Get the status of active/running commands across all terminals',
-            schema: {},
+            schema: z.object({}),
             handler: async () => {
-                const activeCommands = Array.from(this._activeCommands.entries()).map(([tabId, cmd]) => ({
-                    tabId,
+                const activeCommands = Array.from(this._activeCommands.entries()).map(([sessionId, cmd]) => ({
+                    sessionId,
+                    tabIndex: cmd.tabId,
                     command: cmd.command,
                     startedAt: new Date(cmd.timestamp).toISOString(),
                     runningFor: `${Math.round((Date.now() - cmd.timestamp) / 1000)}s`
@@ -346,30 +517,109 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
     }
 
     /**
-     * Find all terminal sessions
+     * Tool: Focus a specific pane in a split tab
+     */
+    private createFocusPaneTool(): McpTool {
+        return {
+            name: 'focus_pane',
+            description: `Focus a specific pane in a split terminal tab.
+Use sessionId to identify the exact pane to focus.
+After focusing, commands sent to that split tab will go to the focused pane.`,
+            schema: z.object({
+                sessionId: z.string().describe('Session ID of the pane to focus (from get_session_list)')
+            }),
+            handler: async (params: { sessionId: string }) => {
+                const { sessionId } = params;
+
+                const session = this.findSessionByLocator({ sessionId });
+                if (!session) {
+                    return {
+                        content: [{
+                            type: 'text', text: JSON.stringify({
+                                success: false,
+                                error: 'No matching session found'
+                            })
+                        }]
+                    };
+                }
+
+                // Check if the session is in a split tab
+                if (session.isSplit && session.tabParent instanceof SplitTabComponent) {
+                    const splitTab = session.tabParent as SplitTabComponent;
+                    splitTab.focus(session.tab);
+
+                    this.logger.info(`Focused pane ${session.paneIndex} in split tab`);
+                    return {
+                        content: [{
+                            type: 'text', text: JSON.stringify({
+                                success: true,
+                                message: `Focused pane ${session.paneIndex} of ${session.totalPanes}`,
+                                sessionId: session.sessionId,
+                                paneIndex: session.paneIndex,
+                                title: session.tab.title
+                            })
+                        }]
+                    };
+                } else {
+                    // Not in a split, just select the tab
+                    this.app.selectTab(session.tabParent);
+
+                    return {
+                        content: [{
+                            type: 'text', text: JSON.stringify({
+                                success: true,
+                                message: 'Selected tab (not a split pane)',
+                                sessionId: session.sessionId
+                            })
+                        }]
+                    };
+                }
+            }
+        };
+    }
+
+    /**
+     * Find all terminal sessions with stable IDs
+     * Enhanced to include split pane information
      */
     public findTerminalSessions(): TerminalSessionWithTab[] {
         const sessions: TerminalSessionWithTab[] = [];
-        let id = 0;
+        let globalIndex = 0;
 
-        this.app.tabs.forEach((tab: BaseTabComponent) => {
+        this.app.tabs.forEach((tab: BaseTabComponent, appTabIndex: number) => {
             if (tab instanceof BaseTerminalTabComponent) {
+                // Single terminal tab (not in a split)
+                const sessionId = this.getOrCreateSessionId(tab);
                 sessions.push({
-                    id: id++,
+                    sessionId,
+                    tabIndex: globalIndex++,
                     tabParent: tab,
-                    tab: tab as BaseTerminalTabComponent
+                    tab: tab as BaseTerminalTabComponent,
+                    isSplit: false
                 });
             } else if (tab instanceof SplitTabComponent) {
-                const childTabs = tab.getAllTabs().filter(
+                // Split tab containing multiple panes
+                const splitTab = tab as SplitTabComponent;
+                const childTabs = splitTab.getAllTabs().filter(
                     (childTab: BaseTabComponent) => childTab instanceof BaseTerminalTabComponent &&
                         (childTab as BaseTerminalTabComponent).frontend !== undefined
                 );
+                const focusedTab = splitTab.getFocusedTab();
+                const totalPanes = childTabs.length;
 
-                childTabs.forEach((childTab: BaseTabComponent) => {
+                childTabs.forEach((childTab: BaseTabComponent, paneIdx: number) => {
+                    const termTab = childTab as BaseTerminalTabComponent;
+                    const sessionId = this.getOrCreateSessionId(termTab);
                     sessions.push({
-                        id: id++,
+                        sessionId,
+                        tabIndex: globalIndex++,
                         tabParent: tab,
-                        tab: childTab as BaseTerminalTabComponent
+                        tab: termTab,
+                        isSplit: true,
+                        splitTabIndex: appTabIndex,
+                        paneIndex: paneIdx,
+                        totalPanes: totalPanes,
+                        isFocusedPane: childTab === focusedTab
                     });
                 });
             }

@@ -12,7 +12,7 @@
 
 **Tabby 终端的全功能 MCP 服务器插件**
 
-*将 AI 助手连接到您的终端，实现完整控制 — 包含 21 个 MCP 工具*
+*将 AI 助手连接到您的终端 — 34 个 MCP 工具，包含 SFTP 支持*
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -28,6 +28,7 @@
 
 ### 🖥️ 终端控制
 - 执行命令并捕获输出
+- **稳定会话 ID** (v1.1+)
 - 读取终端缓冲区内容
 - 中止正在运行的命令
 - 列出所有终端会话
@@ -37,6 +38,7 @@
 
 ### 📑 标签页管理
 - 创建/关闭/复制标签页
+- **分割窗格**（水平/垂直）
 - 在标签页之间导航
 - 左右移动标签页
 - 重新打开已关闭的标签页
@@ -55,9 +57,19 @@
 </td>
 <td>
 
+### 📁 SFTP 操作 (v1.1+)
+- 列出/读取/写入远程文件
+- 创建/删除目录
+- 重命名/移动文件
+- *（需要 tabby-ssh）*
+
+</td>
+</tr>
+<tr>
+<td colspan="2">
+
 ### 🔒 安全特性
-- 结对编程模式
-- 命令确认对话框
+- 结对编程模式（命令确认对话框）
 - 完善的日志记录
 - 安全的命令执行
 
@@ -157,7 +169,7 @@ npm run build
   "mcpServers": {
     "Tabby MCP": {
       "type": "sse",
-      "url": "http://localhost:3001/sse"
+      "url": "http://localhost:3001/mcp"
     }
   }
 }
@@ -165,36 +177,46 @@ npm run build
 
 ### 其他客户端
 
-| 端点 | URL |
-|------|-----|
-| SSE | `http://localhost:3001/sse` |
-| 健康检查 | `http://localhost:3001/health` |
-| 服务器信息 | `http://localhost:3001/info` |
+| 端点 | URL | 协议版本 |
+|------|-----|----------|
+| Streamable HTTP | `http://localhost:3001/mcp` | 2025-03-26 (推荐) |
+| Legacy SSE | `http://localhost:3001/sse` | 2024-11-05 |
+| 健康检查 | `http://localhost:3001/health` | - |
+| 服务器信息 | `http://localhost:3001/info` | - |
 
 ---
 
 ## 🛠️ 可用工具
 
-### 终端控制（6 个）
+### 终端控制（7 个）
 
 | 工具 | 说明 |
 |------|------|
-| `get_session_list` | 列出所有终端会话 |
-| `exec_command` | 执行命令并获取输出 |
+| `get_session_list` | 列出所有终端会话（**包含稳定 UUID**） |
+| `exec_command` | 执行命令（支持多种定位方式） |
 | `send_input` | 发送交互式输入 (Ctrl+C 等) |
-| `get_terminal_buffer` | 读取终端缓冲区 |
+| `get_terminal_buffer` | 读取终端缓冲区（默认使用活跃会话） |
 | `abort_command` | 中止正在运行的命令 |
 | `get_command_status` | 监控活动命令状态 |
+| `focus_pane` | 聚焦分割视图中的特定窗格 |
 
-### 标签页管理（10 个）
+> **v1.1 新功能**: 所有终端工具支持灵活定位：
+> - `sessionId`（稳定 UUID，推荐）
+> - `tabIndex`（传统方式，可能变化）
+> - `title`（部分匹配）
+> - `profileName`（部分匹配）
+> - 无参数 = 使用活跃会话
+
+### 标签页管理（11 个）
 
 | 工具 | 说明 |
 |------|------|
-| `list_tabs` | 列出所有打开的标签页 |
+| `list_tabs` | 列出所有打开的标签页（**包含稳定 ID**） |
 | `select_tab` | 选中指定标签页 |
 | `close_tab` | 关闭标签页 |
 | `close_all_tabs` | 关闭所有标签页 |
 | `duplicate_tab` | 复制标签页 |
+| `split_tab` | **分割窗格**（左/右/上/下） |
 | `next_tab` / `previous_tab` | 导航标签页 |
 | `move_tab_left` / `move_tab_right` | 移动标签页 |
 | `reopen_last_tab` | 重新打开已关闭的标签页 |
@@ -208,6 +230,36 @@ npm run build
 | `show_profile_selector` | 显示配置文件对话框 |
 | `quick_connect` | SSH 快速连接 |
 
+### SFTP 操作（12 个）🆕
+
+> 需要 `tabby-ssh` 插件。如未安装，SFTP 工具自动禁用。
+
+**基础操作：**
+
+| 工具 | 说明 | 关键参数 |
+|------|------|----------|
+| `sftp_list_files` | 列出远程目录 | `path` |
+| `sftp_read_file` | 读取远程文件（文本） | `path` |
+| `sftp_write_file` | 写入文本到远程文件 | `path`, `content` |
+| `sftp_mkdir` | 创建远程目录 | `path` |
+| `sftp_delete` | 删除远程文件/目录 | `path` |
+| `sftp_rename` | 重命名/移动远程文件 | `sourcePath`, `destPath` |
+| `sftp_stat` | 获取文件/目录信息 | `path` |
+
+**文件传输（支持同步/异步）：**
+
+| 工具 | 说明 | 关键参数 |
+|------|------|----------|
+| `sftp_upload` | 上传本地文件 → 远程 | `localPath`, `remotePath`, `sync` |
+| `sftp_download` | 下载远程 → 本地文件 | `remotePath`, `localPath`, `sync` |
+| `sftp_get_transfer_status` | 查询传输进度 | `transferId` |
+| `sftp_list_transfers` | 列出所有传输 | `status`（过滤） |
+| `sftp_cancel_transfer` | 取消活跃传输 | `transferId` |
+
+> **传输模式**：`sync=true`（默认）等待完成。`sync=false` 立即返回 `transferId`。
+> 
+> **大小限制**：可在设置 → MCP → SFTP 中配置。
+
 ---
 
 ## ⚙️ 配置选项
@@ -217,6 +269,8 @@ npm run build
 | 端口 | MCP 服务器端口 | 3001 |
 | 启动时运行 | 自动启动服务器 | true |
 | 结对编程模式 | 执行前确认 | true |
+| 会话跟踪 | 使用稳定 UUID | true |
+| SFTP 启用 | 启用 SFTP 工具 | true |
 
 ---
 
@@ -251,11 +305,38 @@ npm run build
 
 | 特性 | 原项目 | 本项目 |
 |------|--------|--------|
-| MCP 工具 | 4 | **18** |
+| MCP 工具 | 4 | **34** |
 | 标签页管理 | ❌ | ✅ |
 | 配置文件/SSH | ❌ | ✅ |
+| SFTP 支持 | ❌ | ✅ |
+| 稳定会话 ID | ❌ | ✅ |
+| Streamable HTTP | ❌ | ✅ |
 | 初始化 Bug | 存在问题 | ✅ 已修复 |
 | 安装脚本 | 手动 | ✅ 一行命令 |
+
+---
+
+## 📝 更新日志
+
+### v1.1.0 (2026-01-20)
+
+**主要修复：**
+- **SFTP 工具完全重写** - 修复了所有 SFTP 工具返回 "No SSH session found" 的问题
+- 修复 SSH 标签页检测以正确处理 `SplitTabComponent` 内的标签
+- 修复 `get_terminal_buffer` 和 `select_tab` 无参数调用时返回错误的问题
+- 修复 `select_tab` 无法通过 tabId 找到标签页的问题
+- 修复 `quick_connect` 和 `open_profile` 参数验证问题
+
+**改进：**
+- 所有工具现在使用智能默认值：无参数 = 使用活跃会话/标签/第一个 SSH 会话
+- 更新文档：工具数量修正为 34（终端 7 + 标签 11 + 配置文件 4 + SFTP 12）
+- 添加详细的调试日志和更好的错误消息
+- 在文档中添加 `focus_pane` 和 `split_tab` 工具说明
+- 添加 Streamable HTTP 传输支持（协议 2025-03-26）
+- 设置：SFTP 大小限制现在使用 MB 而不是字节
+- 设置：更新 SFTP 说明（移除过时的 base64 警告）
+- `open_profile` 现在返回 sessionId，无需额外查询
+- 增强 SSH 连接状态检测，等待 SSH 会话真正建立
 
 ---
 

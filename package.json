@@ -1,7 +1,7 @@
 {
   "name": "tabby-mcp-server",
-  "version": "1.0.4",
-  "description": "MCP (Model Context Protocol) server plugin for Tabby terminal - Complete terminal control with 21 MCP tools",
+  "version": "1.1.0",
+  "description": "MCP (Model Context Protocol) server plugin for Tabby terminal - Complete terminal control with 34 MCP tools including SFTP file transfer",
   "homepage": "https://github.com/GentlemanHu/Tabby-MCP",
   "repository": {
     "type": "git",
@@ -19,6 +19,7 @@
     "cursor",
     "windsurf",
     "ssh",
+    "sftp",
     "sse"
   ],
   "main": "dist/index.js",
@@ -54,7 +55,13 @@
     "rxjs": "*",
     "tabby-core": "*",
     "tabby-settings": "*",
-    "tabby-terminal": "*"
+    "tabby-terminal": "*",
+    "tabby-ssh": "*"
+  },
+  "peerDependenciesMeta": {
+    "tabby-ssh": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@angular/common": "^17.3.0",

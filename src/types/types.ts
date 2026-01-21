@@ -88,3 +88,57 @@ export interface LogEntry {
     message: string;
     context?: any;
 }
+
+/**
+ * Enhanced terminal session with stable ID and metadata
+ */
+export interface EnhancedTerminalSession {
+    sessionId: string;       // Stable unique ID (UUID)
+    tabIndex: number;        // Array index (may change if tabs are reordered)
+    title: string;
+    type: string;
+    isActive: boolean;
+    hasActiveCommand: boolean;
+    profile?: {
+        id: string;
+        name: string;
+        type: string;
+    };
+    pid?: number;            // Process ID if available
+    cwd?: string;            // Current working directory if available
+}
+
+/**
+ * Session locator for flexible session targeting
+ * Priority: sessionId > tabIndex > title > profileName
+ */
+export interface SessionLocator {
+    sessionId?: string;      // Stable session ID (recommended)
+    tabIndex?: number;       // Tab index (legacy, may change)
+    title?: string;          // Match by title (partial, case-insensitive)
+    profileName?: string;    // Match by profile name (partial, case-insensitive)
+}
+
+/**
+ * SFTP file/directory information
+ */
+export interface SFTPFileInfo {
+    name: string;
+    path: string;
+    isDirectory: boolean;
+    size: number;
+    modifiedTime: string;
+    permissions: string;
+}
+
+/**
+ * SFTP operation result
+ */
+export interface SFTPResult {
+    success: boolean;
+    message?: string;
+    error?: string;
+    files?: SFTPFileInfo[];
+    localPath?: string;
+    remotePath?: string;
+}

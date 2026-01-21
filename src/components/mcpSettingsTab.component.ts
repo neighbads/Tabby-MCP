@@ -4,7 +4,7 @@ import { McpService } from '../services/mcpService';
 import { McpLoggerService } from '../services/mcpLogger.service';
 
 // Version from package.json - update on each release
-const PLUGIN_VERSION = '1.0.4';
+const PLUGIN_VERSION = '1.1.1';
 
 /**
  * MCP Settings Tab Component
@@ -120,6 +120,129 @@ const PLUGIN_VERSION = '1.0.4';
 
       <hr />
 
+      <h4>🎯 Session Tracking</h4>
+      <small class="form-text text-muted mb-2">
+        Configure how sessions and tabs are identified
+      </small>
+
+      <div class="form-group">
+        <div class="checkbox">
+          <label>
+            <input type="checkbox" [(ngModel)]="config.store.mcp.sessionTracking.useStableIds" (change)="saveConfig()">
+            Use stable UUIDs for session identification
+          </label>
+        </div>
+        <small class="form-text text-muted">
+          Sessions get persistent IDs that don't change when tabs are reordered
+        </small>
+      </div>
+
+      <div class="form-group">
+        <div class="checkbox">
+          <label>
+            <input type="checkbox" [(ngModel)]="config.store.mcp.sessionTracking.includeProfileInfo" (change)="saveConfig()">
+            Include profile info in session list
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <div class="checkbox">
+          <label>
+            <input type="checkbox" [(ngModel)]="config.store.mcp.sessionTracking.includePid" (change)="saveConfig()">
+            Include process ID in session info
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <div class="checkbox">
+          <label>
+            <input type="checkbox" [(ngModel)]="config.store.mcp.sessionTracking.includeCwd" (change)="saveConfig()">
+            Include current working directory in session info
+          </label>
+        </div>
+      </div>
+
+      <hr />
+
+      <h4>📁 SFTP Settings</h4>
+      <small class="form-text text-muted mb-2">
+        SFTP file transfer support (requires tabby-ssh plugin)
+      </small>
+
+      <div class="form-group">
+        <div class="checkbox">
+          <label>
+            <input type="checkbox" [(ngModel)]="config.store.mcp.sftp.enabled" (change)="saveConfig()">
+            Enable SFTP tools
+          </label>
+        </div>
+        <small class="form-text text-muted">
+          If tabby-ssh is not installed, SFTP tools will be disabled automatically
+        </small>
+      </div>
+
+      <div class="form-group" *ngIf="config.store.mcp.sftp.enabled">
+        <label>Max Read Size</label>
+        <div class="input-group">
+          <input type="number" class="form-control" [ngModel]="getMaxFileSizeMB()" 
+                 (ngModelChange)="setMaxFileSizeMB($event)" placeholder="1" min="0.1" max="100" step="0.5">
+          <div class="input-group-append">
+            <span class="input-group-text">MB</span>
+          </div>
+        </div>
+        <small class="form-text text-muted">Maximum file size for sftp_read_file (default: 1 MB, max: 100 MB)</small>
+      </div>
+
+      <div class="form-group" *ngIf="config.store.mcp.sftp.enabled">
+        <label>Max Upload Size</label>
+        <div class="input-group">
+          <input type="number" class="form-control" [ngModel]="getMaxUploadSizeMB()" 
+                 (ngModelChange)="setMaxUploadSizeMB($event)" placeholder="10" min="0.1" max="100" step="0.5">
+          <div class="input-group-append">
+            <span class="input-group-text">MB</span>
+          </div>
+        </div>
+        <small class="form-text text-muted">Maximum file size for sftp_upload (default: 10 MB, max: 100 MB)</small>
+      </div>
+
+      <div class="form-group" *ngIf="config.store.mcp.sftp.enabled">
+        <label>Max Download Size</label>
+        <div class="input-group">
+          <input type="number" class="form-control" [ngModel]="getMaxDownloadSizeMB()" 
+                 (ngModelChange)="setMaxDownloadSizeMB($event)" placeholder="10" min="0.1" max="100" step="0.5">
+          <div class="input-group-append">
+            <span class="input-group-text">MB</span>
+          </div>
+        </div>
+        <small class="form-text text-muted">Maximum file size for sftp_download (default: 10 MB, max: 100 MB)</small>
+      </div>
+
+      <div class="form-group" *ngIf="config.store.mcp.sftp.enabled">
+        <label>Timeout (seconds)</label>
+        <div class="input-group">
+          <input type="number" class="form-control" [ngModel]="getTimeoutSeconds()" 
+                 (ngModelChange)="setTimeoutSeconds($event)" placeholder="60" min="5" max="300" step="5">
+          <div class="input-group-append">
+            <span class="input-group-text">sec</span>
+          </div>
+        </div>
+        <small class="form-text text-muted">SFTP operation timeout (default: 60 seconds)</small>
+      </div>
+
+      <div class="alert alert-info" *ngIf="config.store.mcp.sftp.enabled">
+        <strong>ℹ️ SFTP Notes:</strong>
+        <ul class="mb-0">
+          <li>File transfers are direct binary (no base64 encoding)</li>
+          <li>Large files may consume significant memory during transfer</li>
+          <li><code>sftp_write_file</code> can overwrite files without confirmation</li>
+          <li>If file exceeds size limit, MCP will return an error (no popup)</li>
+        </ul>
+      </div>
+
+      <hr />
+
       <h4>⏱️ Timing Settings</h4>
       <small class="form-text text-muted mb-2">
         Advanced timing configuration for command execution and session detection
@@ -157,11 +280,12 @@ const PLUGIN_VERSION = '1.0.4';
 
       <h4>🔗 Connection Info</h4>
       <div class="connection-info">
-        <p><strong>SSE Endpoint:</strong> <code>http://localhost:{{ config.store.mcp.port }}/sse</code></p>
+        <p><strong>Streamable HTTP (Recommended):</strong> <code>http://localhost:{{ config.store.mcp.port }}/mcp</code></p>
+        <p><strong>Legacy SSE:</strong> <code>http://localhost:{{ config.store.mcp.port }}/sse</code></p>
         <p><strong>Health Check:</strong> <code>http://localhost:{{ config.store.mcp.port }}/health</code></p>
         
         <div class="mt-3">
-          <p class="text-muted">Add to your MCP client (e.g., Cursor):</p>
+          <p class="text-muted">Add to your MCP client (e.g., Cursor, VS Code):</p>
           <pre class="config-example">{{getConfigExample()}}</pre>
           <button class="btn btn-sm btn-outline-primary" (click)="copyConfig()">Copy Config</button>
         </div>
@@ -257,6 +381,32 @@ export class McpSettingsTabComponent implements OnInit {
         sessionPollInterval: 200
       };
     }
+    // Ensure sessionTracking config exists
+    if (!this.config.store.mcp.sessionTracking) {
+      this.config.store.mcp.sessionTracking = {
+        useStableIds: true,
+        includeProfileInfo: true,
+        includePid: true,
+        includeCwd: true
+      };
+    }
+    // Ensure sftp config exists
+    if (!this.config.store.mcp.sftp) {
+      this.config.store.mcp.sftp = {
+        enabled: true,
+        maxFileSize: 1024 * 1024,      // 1MB for read
+        maxUploadSize: 10 * 1024 * 1024,   // 10MB for upload
+        maxDownloadSize: 10 * 1024 * 1024, // 10MB for download
+        timeout: 60000
+      };
+    }
+    // Ensure new fields exist on existing config
+    if (this.config.store.mcp.sftp.maxUploadSize === undefined) {
+      this.config.store.mcp.sftp.maxUploadSize = 10 * 1024 * 1024;
+    }
+    if (this.config.store.mcp.sftp.maxDownloadSize === undefined) {
+      this.config.store.mcp.sftp.maxDownloadSize = 10 * 1024 * 1024;
+    }
   }
 
   get isRunning(): boolean {
@@ -310,12 +460,49 @@ export class McpSettingsTabComponent implements OnInit {
     setTimeout(() => { this.saveMessage = ''; }, 2000);
   }
 
+  // ============== Size conversion helpers (MB <-> Bytes) ==============
+
+  getMaxFileSizeMB(): number {
+    return Math.round((this.config.store.mcp?.sftp?.maxFileSize || 1048576) / 1048576 * 10) / 10;
+  }
+  setMaxFileSizeMB(mb: number): void {
+    this.config.store.mcp.sftp.maxFileSize = Math.round(mb * 1048576);
+    this.saveConfig();
+  }
+
+  getMaxUploadSizeMB(): number {
+    return Math.round((this.config.store.mcp?.sftp?.maxUploadSize || 10485760) / 1048576 * 10) / 10;
+  }
+  setMaxUploadSizeMB(mb: number): void {
+    this.config.store.mcp.sftp.maxUploadSize = Math.round(mb * 1048576);
+    this.saveConfig();
+  }
+
+  getMaxDownloadSizeMB(): number {
+    return Math.round((this.config.store.mcp?.sftp?.maxDownloadSize || 10485760) / 1048576 * 10) / 10;
+  }
+  setMaxDownloadSizeMB(mb: number): void {
+    this.config.store.mcp.sftp.maxDownloadSize = Math.round(mb * 1048576);
+    this.saveConfig();
+  }
+
+  getTimeoutSeconds(): number {
+    return Math.round((this.config.store.mcp?.sftp?.timeout || 60000) / 1000);
+  }
+  setTimeoutSeconds(sec: number): void {
+    this.config.store.mcp.sftp.timeout = sec * 1000;
+    this.saveConfig();
+  }
+
+  // ============== Config example ==============
+
   getConfigExample(): string {
+    const port = this.config.store.mcp?.port || 3001;
     return JSON.stringify({
       mcpServers: {
         'Tabby MCP': {
           type: 'sse',
-          url: `http://localhost:${this.config.store.mcp?.port || 3001}/sse`
+          url: `http://localhost:${port}/mcp`
         }
       }
     }, null, 2);
@@ -326,4 +513,3 @@ export class McpSettingsTabComponent implements OnInit {
     this.logger.info('Config copied to clipboard');
   }
 }
-
