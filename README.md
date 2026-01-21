@@ -354,6 +354,13 @@ This project builds upon the work of [tabby-mcp-server](https://github.com/thuan
 
 ## 📝 Changelog
 
+### v1.1.1 (2026-01-21)
+
+**Bug Fixes:**
+- 🔧 Fixed Streamable HTTP connection leak - connections were not being cleaned up when clients disconnected
+- Added `transport.onclose` handler to properly remove closed sessions from tracking
+- Enhanced SSE stream close logging for better debugging
+
 ### v1.1.0 (2026-01-20)
 
 **Major Fixes:**

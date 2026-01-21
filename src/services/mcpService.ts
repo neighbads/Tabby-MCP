@@ -42,7 +42,7 @@ export class McpService {
         // Initialize MCP Server
         this.server = new McpServer({
             name: 'Tabby MCP',
-            version: '1.1.0'
+            version: '1.1.1'
         });
 
         // Configure Express
@@ -107,7 +107,7 @@ export class McpService {
             res.status(200).json({
                 status: 'ok',
                 server: 'Tabby MCP',
-                version: '1.1.0',
+                version: '1.1.1',
                 transport: 'StreamableHTTP + SSE',
                 uptime: process.uptime()
             });
@@ -117,7 +117,7 @@ export class McpService {
         this.app.get('/info', (_, res) => {
             res.status(200).json({
                 name: 'Tabby MCP',
-                version: '1.1.0',
+                version: '1.1.1',
                 protocolVersion: '2025-03-26',
                 transports: ['streamable-http', 'sse'],
                 endpoints: {
@@ -179,7 +179,12 @@ export class McpService {
                         }
                     }, 15000);
 
-                    res.on('close', () => clearInterval(heartbeat));
+                    res.on('close', () => {
+                        clearInterval(heartbeat);
+                        this.logger.info(`Streamable HTTP: SSE stream closed for session: ${sessionId}`);
+                        // Note: Don't delete transport here - it may still be used for POST requests
+                        // The transport.onclose handler will clean up when fully disconnected
+                    });
                     return;
                 }
 
@@ -226,6 +231,12 @@ export class McpService {
                             this.logger.info(`Streamable HTTP: Session initialized: ${sid}`);
                         }
                     });
+
+                    // Register close handler to clean up when connection is closed
+                    transport.onclose = () => {
+                        this.logger.info(`Streamable HTTP: Transport closed (onclose): ${sessionId}`);
+                        delete this.streamableTransports[sessionId];
+                    };
 
                     this.streamableTransports[sessionId] = transport;
 
