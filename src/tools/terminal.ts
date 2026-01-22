@@ -42,6 +42,9 @@ export class TerminalToolCategory extends BaseToolCategory {
     private _activeCommands = new Map<string, ActiveCommand>();
     private _activeCommandsSubject = new BehaviorSubject<Map<string, ActiveCommand>>(new Map());
 
+    // Shell type cache per session (avoids repeated detection)
+    private shellTypeCache = new Map<string, 'bash' | 'zsh' | 'fish' | 'sh'>();
+
     public readonly activeCommands$ = this._activeCommandsSubject.asObservable();
 
     constructor(
@@ -85,6 +88,166 @@ export class TerminalToolCategory extends BaseToolCategory {
             this.tabToSessionId.set(tab, sessionId);
         }
         return sessionId;
+    }
+
+    /**
+     * Detect shell type from terminal session info
+     * Used to generate shell-compatible command wrappers
+     * 
+     * Detection priority:
+     * 1. Cached result (if previously detected)
+     * 2. Terminal buffer analysis (most accurate for active sessions)
+     * 3. Profile type/name hints
+     * 4. Terminal title hints
+     * 5. Default to 'sh' (POSIX fallback)
+     */
+    private detectShellType(session: TerminalSessionWithTab): 'bash' | 'zsh' | 'fish' | 'sh' {
+        // Step 1: Check cache first
+        const cached = this.shellTypeCache.get(session.sessionId);
+        if (cached) {
+            this.logger.debug(`Shell type from cache: ${cached} for session ${session.sessionId}`);
+            return cached;
+        }
+
+        const tabAny = session.tab as any;
+
+        // Step 2: Analyze terminal buffer for shell-specific patterns
+        // This is the most reliable method for connected sessions
+        try {
+            const buffer = this.getTerminalBufferText(session);
+            if (buffer && buffer.length > 0) {
+                // Fish-specific patterns
+                // - Welcome message: "Welcome to fish"
+                // - Error message when using $?: "fish: $? is not the exit status"
+                // - Fish version info: "fish, version X.Y.Z"
+                // - Fish default prompts: ❯, ⏎, or specific fish greeting
+                const fishBufferPatterns = [
+                    /Welcome to fish/i,
+                    /fish:.*\$\? is not the exit status/i,
+                    /fish,?\s*version/i,
+                    /In fish, please use \$status/i,
+                    /❯\s*$/m,  // Fish default prompt character
+                ];
+
+                for (const pattern of fishBufferPatterns) {
+                    if (pattern.test(buffer)) {
+                        this.logger.info(`Detected fish shell from buffer pattern: ${pattern}`);
+                        this.shellTypeCache.set(session.sessionId, 'fish');
+                        return 'fish';
+                    }
+                }
+
+                // Bash-specific patterns
+                const bashBufferPatterns = [
+                    /bash.*version/i,
+                    /GNU bash/i,
+                ];
+                for (const pattern of bashBufferPatterns) {
+                    if (pattern.test(buffer)) {
+                        this.logger.info(`Detected bash shell from buffer pattern`);
+                        this.shellTypeCache.set(session.sessionId, 'bash');
+                        return 'bash';
+                    }
+                }
+
+                // Zsh-specific patterns
+                const zshBufferPatterns = [
+                    /zsh.*version/i,
+                    /oh-my-zsh/i,
+                ];
+                for (const pattern of zshBufferPatterns) {
+                    if (pattern.test(buffer)) {
+                        this.logger.info(`Detected zsh shell from buffer pattern`);
+                        this.shellTypeCache.set(session.sessionId, 'zsh');
+                        return 'zsh';
+                    }
+                }
+            }
+        } catch (e) {
+            this.logger.debug(`Buffer analysis failed, falling back to profile/title hints`);
+        }
+
+        // Step 3: Check profile info (fallback)
+        const profileName = tabAny.profile?.name || '';
+        const profileType = tabAny.profile?.type || '';
+        const profileOptions = tabAny.profile?.options || {};
+        const shellPath = profileOptions.shell || profileOptions.command || '';
+        const allProfileText = `${profileName} ${profileType} ${shellPath}`.toLowerCase();
+
+        const fishPatterns = [/\bfish\b/i, /fish$/i];
+        const zshPatterns = [/\bzsh\b/i, /zsh$/i];
+        const bashPatterns = [/\bbash\b/i, /bash$/i];
+
+        if (fishPatterns.some(p => p.test(allProfileText))) {
+            this.logger.debug(`Detected fish shell from profile: ${profileName}`);
+            this.shellTypeCache.set(session.sessionId, 'fish');
+            return 'fish';
+        }
+        if (zshPatterns.some(p => p.test(allProfileText))) {
+            this.logger.debug(`Detected zsh shell from profile: ${profileName}`);
+            this.shellTypeCache.set(session.sessionId, 'zsh');
+            return 'zsh';
+        }
+        if (bashPatterns.some(p => p.test(allProfileText))) {
+            this.logger.debug(`Detected bash shell from profile: ${profileName}`);
+            this.shellTypeCache.set(session.sessionId, 'bash');
+            return 'bash';
+        }
+
+        // Step 4: Check terminal title (last resort)
+        const title = session.tab.title || '';
+        if (fishPatterns.some(p => p.test(title))) {
+            this.logger.debug(`Detected fish shell from title: ${title}`);
+            this.shellTypeCache.set(session.sessionId, 'fish');
+            return 'fish';
+        }
+        if (zshPatterns.some(p => p.test(title))) {
+            this.logger.debug(`Detected zsh shell from title: ${title}`);
+            this.shellTypeCache.set(session.sessionId, 'zsh');
+            return 'zsh';
+        }
+        if (bashPatterns.some(p => p.test(title))) {
+            this.logger.debug(`Detected bash shell from title: ${title}`);
+            this.shellTypeCache.set(session.sessionId, 'bash');
+            return 'bash';
+        }
+
+        // Step 5: Default to 'sh' (POSIX compatible - safest fallback)
+        this.logger.debug(`Shell type unknown, defaulting to sh (POSIX) for session ${session.sessionId}`);
+        // Don't cache unknown - allow re-detection on next command
+        return 'sh';
+    }
+
+    /**
+     * Generate shell-compatible wrapped command for output capture
+     * 
+     * Different shells use different syntax:
+     * - bash/zsh/sh: $? for exit code, && for chaining
+     * - fish: $status for exit code, ; for chaining
+     */
+    private getWrappedCommand(
+        command: string,
+        startMarker: string,
+        endMarker: string,
+        shellType: 'bash' | 'zsh' | 'fish' | 'sh'
+    ): string {
+        switch (shellType) {
+            case 'fish':
+                // Fish shell: use $status instead of $?
+                // Fish doesn't support && in the same way, use ; and check status
+                return `echo "${startMarker}"; ${command}; set -l __mcp_exit $status; echo "${endMarker} $__mcp_exit"`;
+
+            case 'bash':
+            case 'zsh':
+                // Bash/Zsh: standard POSIX-like syntax
+                return `echo "${startMarker}" && ${command} ; echo "${endMarker} $?"`;
+
+            case 'sh':
+            default:
+                // POSIX sh: most compatible syntax
+                // Use subshell to ensure exit code is captured correctly
+                return `echo "${startMarker}" && ${command} ; echo "${endMarker} $?"`;
+        }
     }
 
     /**
@@ -254,9 +417,15 @@ For long-running commands, increase timeout or use waitForOutput=false and poll 
                 }
 
                 try {
-                    // Focus terminal if configured
-                    if (this.config.store.mcp?.pairProgrammingMode?.autoFocusTerminal) {
+                    // Focus terminal ONLY if background execution is disabled
+                    // Background mode allows AI to work on tabs without disturbing user's current focus
+                    const backgroundMode = this.config.store.mcp?.backgroundExecution?.enabled ?? false;
+                    if (!backgroundMode) {
                         this.app.selectTab(session.tabParent);
+                        // For split panes, also focus the specific pane
+                        if (session.isSplit && session.tabParent instanceof SplitTabComponent) {
+                            (session.tabParent as SplitTabComponent).focus(session.tab);
+                        }
                     }
 
                     // For non-waiting mode, just send the command
@@ -293,11 +462,12 @@ For long-running commands, increase timeout or use waitForOutput=false and poll 
                     this._activeCommands.set(session.sessionId, activeCommand);
                     this._activeCommandsSubject.next(new Map(this._activeCommands));
 
-                    // Send command with markers
-                    const wrappedCommand = `echo "${startMarker}" && ${command} ; echo "${endMarker} $?"`;
+                    // Send command with markers - use shell-aware wrapper
+                    const detectedShell = this.detectShellType(session);
+                    const wrappedCommand = this.getWrappedCommand(command, startMarker, endMarker, detectedShell);
                     session.tab.sendInput(wrappedCommand + '\n');
 
-                    this.logger.info(`Executing command: ${command} in session ${session.sessionId}`);
+                    this.logger.info(`Executing command: ${command} in session ${session.sessionId} (shell: ${detectedShell})`);
 
                     // Wait for output
                     const result = await this.waitForCommandOutput(session, startMarker, endMarker, timeout, () => aborted);

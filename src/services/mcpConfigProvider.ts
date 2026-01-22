@@ -32,6 +32,10 @@ export class McpConfigProvider extends ConfigProvider {
                 includePid: true,           // Include process ID in session info
                 includeCwd: true            // Include current working directory
             },
+            // Background execution mode - allows MCP to run commands without focusing the terminal
+            backgroundExecution: {
+                enabled: false              // Default: false (focus terminal for visibility/safety)
+            },
             // SFTP configuration (requires tabby-ssh)
             sftp: {
                 enabled: true,              // Enable SFTP tools if tabby-ssh is available

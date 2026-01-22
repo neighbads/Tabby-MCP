@@ -4,7 +4,7 @@ import { McpService } from '../services/mcpService';
 import { McpLoggerService } from '../services/mcpLogger.service';
 
 // Version from package.json - update on each release
-const PLUGIN_VERSION = '1.1.3';
+const PLUGIN_VERSION = '1.1.4';
 
 /**
  * MCP Settings Tab Component
@@ -162,6 +162,43 @@ const PLUGIN_VERSION = '1.1.3';
             Include current working directory in session info
           </label>
         </div>
+      </div>
+
+      <hr />
+
+      <h4>🔄 Background Execution</h4>
+      <small class="form-text text-muted mb-2">
+        Control whether MCP operations run in the background without switching focus
+      </small>
+
+      <div class="form-group">
+        <div class="checkbox">
+          <label>
+            <input type="checkbox" [(ngModel)]="config.store.mcp.backgroundExecution.enabled" (change)="saveConfig()">
+            Enable Background Execution Mode
+          </label>
+        </div>
+        <small class="form-text text-muted">
+          When enabled, AI commands execute without switching focus to the target terminal.
+          You can continue working on other tabs while AI runs commands in the background.
+        </small>
+      </div>
+
+      <div class="alert alert-warning" *ngIf="config.store.mcp.backgroundExecution.enabled">
+        <strong>⚠️ Background Execution Risks:</strong>
+        <ul class="mb-0">
+          <li><strong>Limited Visibility:</strong> You won't see commands executing in real-time</li>
+          <li><strong>Input Conflicts:</strong> If you type in the target terminal while AI is running, input will mix and cause errors</li>
+          <li><strong>Split Panes:</strong> Commands are sent to the pane specified by <code>sessionId</code>, not the focused pane</li>
+          <li><strong>Dangerous Commands:</strong> AI could run destructive commands (rm -rf, etc.) without you noticing immediately</li>
+        </ul>
+        <hr class="my-2"/>
+        <strong>✅ Recommended Safety Measures:</strong>
+        <ul class="mb-0">
+          <li>Keep "Pair Programming Mode" enabled with confirmation dialogs</li>
+          <li>Use <code>sessionId</code> to target specific terminals to avoid accidental cross-terminal execution</li>
+          <li>Monitor terminal buffers periodically via <code>get_terminal_buffer</code></li>
+        </ul>
       </div>
 
       <hr />
@@ -388,6 +425,12 @@ export class McpSettingsTabComponent implements OnInit {
         includeProfileInfo: true,
         includePid: true,
         includeCwd: true
+      };
+    }
+    // Ensure backgroundExecution config exists
+    if (!this.config.store.mcp.backgroundExecution) {
+      this.config.store.mcp.backgroundExecution = {
+        enabled: false  // Default: disabled for safety
       };
     }
     // Ensure sftp config exists

@@ -604,6 +604,8 @@ NOTE: This opens a NEW tab. For existing connections, use get_session_list + exe
                                 }
 
                                 // Check 3: Buffer stability (fallback indicator)
+                                // NOTE: For SSH, buffer stability alone is NOT sufficient!
+                                // SSH may show connection prompts before actually authenticating.
                                 let bufferLength = 0;
                                 try {
                                     const xterm = tabAny.frontend?.xterm;
@@ -614,21 +616,28 @@ NOTE: This opens a NEW tab. For existing connections, use get_session_list + exe
                                     // Ignore buffer access errors
                                 }
 
-                                // Buffer has content and is stable = likely connected
-                                if (bufferLength > 0 && bufferLength === lastBufferLength) {
-                                    stableCount++;
-                                    if (stableCount >= sessionStableChecks) {
-                                        tabReady = true;
-                                        if (isSSH) {
-                                            // For SSH, check one more time if sshSession is available
-                                            const sshSession = tabAny.sshSession;
-                                            sshConnected = sshSession?.open === true;
+                                // For SSH: Only use buffer stability as exit AFTER sshConnected
+                                // For non-SSH: Buffer stability can be used as ready indicator
+                                if (!isSSH) {
+                                    // Non-SSH: Buffer stability = ready
+                                    if (bufferLength > 0 && bufferLength === lastBufferLength) {
+                                        stableCount++;
+                                        if (stableCount >= sessionStableChecks) {
+                                            tabReady = true;
+                                            break;
                                         }
-                                        break;
+                                    } else {
+                                        stableCount = 0;
+                                        lastBufferLength = bufferLength;
                                     }
                                 } else {
-                                    stableCount = 0;
-                                    lastBufferLength = bufferLength;
+                                    // SSH: Keep checking sshSession.open in the loop above
+                                    // Buffer stability alone should NOT trigger exit for SSH
+                                    // Just track the buffer for debugging
+                                    if (bufferLength !== lastBufferLength) {
+                                        lastBufferLength = bufferLength;
+                                        this.logger.debug(`[open_profile] SSH buffer activity: ${bufferLength} chars`);
+                                    }
                                 }
 
                                 await new Promise(resolve => setTimeout(resolve, sessionPollInterval));

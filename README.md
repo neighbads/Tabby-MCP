@@ -306,7 +306,24 @@ For clients that don't support SSE, use the STDIO bridge:
 | Start on Boot | Auto-start server | true |
 | Pair Programming | Confirm commands | true |
 | Session Tracking | Use stable UUIDs | true |
+| Background Execution | Run without focus | false |
 | SFTP Enabled | Enable SFTP tools | true |
+
+---
+
+## 🔄 Background Execution Mode
+
+Enable this mode to allow MCP commands to run **without switching focus** to the terminal. This lets you continue working on other tabs while AI executes commands in the background.
+
+**Settings → MCP → Background Execution**
+
+> ⚠️ **Risks:**
+> - You won't see commands executing in real-time
+> - If you type in the target terminal while AI is running, input will conflict
+> - For split panes, commands go to the `sessionId` target, not the focused pane
+> - Dangerous commands could run without you noticing
+
+> ✅ **Recommended:** Keep "Pair Programming Mode" enabled with confirmation dialogs for safety.
 
 ---
 
@@ -353,6 +370,20 @@ This project builds upon the work of [tabby-mcp-server](https://github.com/thuan
 ---
 
 ## 📝 Changelog
+
+### v1.1.4 (2026-01-22)
+
+**New Features:**
+- 🔄 **Background Execution Mode** - Run MCP commands without switching terminal focus
+  - Settings UI with comprehensive risk warnings
+  - Split pane focus handling for proper pane targeting
+- 🐚 **Multi-shell Compatibility** - `exec_command` now supports Fish, Bash, Zsh, and sh
+  - Auto-detects shell type from terminal buffer patterns
+  - Shell-specific command wrappers for exit code capture
+
+**Bug Fixes:**
+- 🔧 Fixed `open_profile` SSH readiness detection - no longer returns prematurely before SSH is connected
+- Fixed shell detection for non-bash shells (Fish shell `$status` vs `$?`)
 
 ### v1.1.3 (2026-01-22)
 
