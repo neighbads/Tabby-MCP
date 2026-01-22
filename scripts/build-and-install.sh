@@ -9,7 +9,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-PLUGIN_NAME="tabby-mcp"
+PLUGIN_NAME="tabby-mcp-server"
 
 # Colors for output
 RED='\033[0;31m'

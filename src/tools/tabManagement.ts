@@ -1,10 +1,11 @@
-import { Injectable } from '@angular/core';
+import { Injectable, Inject, forwardRef } from '@angular/core';
 import { AppService, BaseTabComponent, ConfigService, SplitTabComponent, ProfilesService } from 'tabby-core';
 import { BaseTerminalTabComponent } from 'tabby-terminal';
 import { z } from 'zod';
 import { BaseToolCategory } from './base-tool-category';
 import { McpLoggerService } from '../services/mcpLogger.service';
 import { McpTool } from '../types/types';
+import { TerminalToolCategory } from './terminal';
 
 /**
  * Tab Management Tools Category - Comprehensive tab and profile management
@@ -17,7 +18,8 @@ export class TabManagementToolCategory extends BaseToolCategory {
         private app: AppService,
         logger: McpLoggerService,
         private config: ConfigService,
-        private profilesService: ProfilesService
+        private profilesService: ProfilesService,
+        @Inject(forwardRef(() => TerminalToolCategory)) private terminalTools: TerminalToolCategory
     ) {
         super(logger);
         this.initializeTools();
@@ -471,6 +473,12 @@ Parameters:
 - timeout: Timeout in ms when waiting (default: 30000)
 
 Returns sessionId for immediate use with exec_command, SFTP tools, etc.
+
+Response state fields:
+- tabReady: Tab/frontend initialized
+- sshConnected: SSH connection established (SSH profiles only)
+- ready: OVERALL ready state (for SSH: tabReady AND sshConnected)
+
 For SSH profiles, waits until sshSession.open=true (real connection established).
 
 NOTE: This opens a NEW tab. For existing connections, use get_session_list + exec_command.`,
@@ -536,13 +544,24 @@ NOTE: This opens a NEW tab. For existing connections, use get_session_list + exe
                         // Determine default waitForReady based on profile type
                         const waitForReady = params?.waitForReady ?? isSSH;
 
-                        // Generate sessionId for the new tab
-                        // Use same UUID generation as TerminalToolCategory
-                        let sessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-                            const r = Math.random() * 16 | 0;
-                            const v = c === 'x' ? r : (r & 0x3 | 0x8);
-                            return v.toString(16);
-                        });
+                        // Get sessionId from TerminalToolCategory's registry
+                        // CRITICAL: Call getOrCreateSessionId DIRECTLY on the tab object
+                        // DO NOT use findTerminalSessions() as the tab may not yet be in app.tabs
+                        let sessionId: string | undefined;
+                        if (tab instanceof BaseTerminalTabComponent) {
+                            // Direct call to getOrCreateSessionId ensures the same ID is registered
+                            sessionId = this.terminalTools.getOrCreateSessionId(tab);
+                            this.logger.debug(`[open_profile] SessionId assigned: ${sessionId}`);
+                        }
+                        // Fallback: generate UUID if not a terminal tab (shouldn't happen)
+                        if (!sessionId) {
+                            sessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+                                const r = Math.random() * 16 | 0;
+                                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                                return v.toString(16);
+                            });
+                            this.logger.warn(`[open_profile] Tab is not BaseTerminalTabComponent, generated fallback sessionId: ${sessionId}`);
+                        }
 
                         if (waitForReady) {
                             // Wait for the terminal session to be fully connected
@@ -616,7 +635,13 @@ NOTE: This opens a NEW tab. For existing connections, use get_session_list + exe
                             }
 
                             const elapsed = Date.now() - startTime;
-                            this.logger.info(`[open_profile] Profile opened: ${profile.name} (tabReady=${tabReady}, sshConnected=${sshConnected}, elapsed=${elapsed}ms)`);
+
+                            // Determine final ready state:
+                            // - For SSH: ready = tabReady AND sshConnected
+                            // - For non-SSH: ready = tabReady
+                            const ready = isSSH ? (tabReady && sshConnected) : tabReady;
+
+                            this.logger.info(`[open_profile] Profile opened: ${profile.name} (tabReady=${tabReady}, sshConnected=${sshConnected}, ready=${ready}, elapsed=${elapsed}ms)`);
 
                             return {
                                 content: [{
@@ -628,13 +653,19 @@ NOTE: This opens a NEW tab. For existing connections, use get_session_list + exe
                                         tabTitle: tab.title,
                                         profileName: profile.name,
                                         profileType: profile.type,
-                                        ready: tabReady,
-                                        sshConnected: isSSH ? sshConnected : undefined,
+                                        // State fields with clear semantics:
+                                        tabReady,           // Tab/frontend initialized
+                                        sshConnected: isSSH ? sshConnected : undefined,  // SSH connection established (SSH only)
+                                        ready,              // OVERALL ready state: can start using this session
                                         elapsed: `${elapsed}ms`,
-                                        message: tabReady
+                                        message: ready
                                             ? `Profile ready: ${profile.name}`
-                                            : `Profile opened but may not be fully connected: ${profile.name}`,
-                                        hint: 'Use sessionId with exec_command, SFTP tools, etc.'
+                                            : tabReady && !sshConnected
+                                                ? `Tab opened but SSH not connected: ${profile.name}`
+                                                : `Profile opened but not fully ready: ${profile.name}`,
+                                        hint: ready
+                                            ? 'Use sessionId with exec_command, SFTP tools, etc.'
+                                            : 'Session may not be fully connected. Check sshConnected status.'
                                     })
                                 }]
                             };
@@ -652,9 +683,12 @@ NOTE: This opens a NEW tab. For existing connections, use get_session_list + exe
                                     tabTitle: tab.title,
                                     profileName: profile.name,
                                     profileType: profile.type,
-                                    ready: false,
+                                    // State fields (unknown since we didn't wait)
+                                    tabReady: undefined,    // Unknown - didn't wait
+                                    sshConnected: undefined, // Unknown - didn't wait
+                                    ready: false,           // Not verified as ready
                                     message: `Opened profile: ${profile.name}`,
-                                    note: 'Profile opened. SSH connections may take a moment to establish.',
+                                    note: 'Profile opened without waiting. Use get_session_list to check status.',
                                     hint: 'Use sessionId with exec_command, SFTP tools, etc.'
                                 })
                             }]

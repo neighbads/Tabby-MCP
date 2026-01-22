@@ -4,7 +4,7 @@ import { McpService } from '../services/mcpService';
 import { McpLoggerService } from '../services/mcpLogger.service';
 
 // Version from package.json - update on each release
-const PLUGIN_VERSION = '1.1.2';
+const PLUGIN_VERSION = '1.1.3';
 
 /**
  * MCP Settings Tab Component

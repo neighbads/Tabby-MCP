@@ -7,7 +7,7 @@
 $ErrorActionPreference = "Stop"
 
 $Repo = "GentlemanHu/Tabby-MCP"
-$PluginName = "tabby-mcp"
+$PluginName = "tabby-mcp-server"
 $ApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
 $TabbyPluginDir = Join-Path $env:APPDATA "tabby\plugins\node_modules\$PluginName"
 
@@ -43,7 +43,7 @@ try {
 Write-Host "📥 Downloading..." -ForegroundColor Yellow
 
 $TempDir = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemType Directory -Path $_ }
-$ZipFile = Join-Path $TempDir "tabby-mcp.zip"
+$ZipFile = Join-Path $TempDir "tabby-mcp-server.zip"
 
 try {
     Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipFile -UseBasicParsing

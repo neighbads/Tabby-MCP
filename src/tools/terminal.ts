@@ -71,8 +71,9 @@ export class TerminalToolCategory extends BaseToolCategory {
 
     /**
      * Get or create a stable session ID for a tab
+     * Made public for cross-category access (e.g., from TabManagementToolCategory)
      */
-    private getOrCreateSessionId(tab: BaseTerminalTabComponent): string {
+    public getOrCreateSessionId(tab: BaseTerminalTabComponent): string {
         let sessionId = this.tabToSessionId.get(tab);
         if (!sessionId) {
             // Generate UUID

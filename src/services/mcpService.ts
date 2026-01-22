@@ -42,7 +42,7 @@ export class McpService {
         // Initialize MCP Server
         this.server = new McpServer({
             name: 'Tabby MCP',
-            version: '1.1.2'
+            version: '1.1.3'
         });
 
         // Configure Express
@@ -107,7 +107,7 @@ export class McpService {
             res.status(200).json({
                 status: 'ok',
                 server: 'Tabby MCP',
-                version: '1.1.2',
+                version: '1.1.3',
                 transport: 'StreamableHTTP + SSE',
                 uptime: process.uptime()
             });
@@ -117,7 +117,7 @@ export class McpService {
         this.app.get('/info', (_, res) => {
             res.status(200).json({
                 name: 'Tabby MCP',
-                version: '1.1.2',
+                version: '1.1.3',
                 protocolVersion: '2025-03-26',
                 transports: ['streamable-http', 'sse'],
                 endpoints: {

@@ -12,9 +12,9 @@
  * For Claude Desktop mcp.json:
  *   {
  *     "mcpServers": {
- *       "tabby-mcp": {
+ *       "tabby-mcp-server": {
  *         "command": "node",
- *         "args": ["/path/to/tabby-mcp/scripts/stdio-bridge.js"]
+ *         "args": ["/path/to/tabby-mcp-server/scripts/stdio-bridge.js"]
  *       }
  *     }
  *   }

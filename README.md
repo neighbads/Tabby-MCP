@@ -184,7 +184,7 @@ For clients that don't support SSE, use the STDIO bridge:
 ```json
 {
   "mcpServers": {
-    "tabby-mcp": {
+    "tabby-mcp-server": {
       "command": "node",
       "args": ["/path/to/Tabby-MCP/scripts/stdio-bridge.js"]
     }
@@ -198,7 +198,7 @@ For clients that don't support SSE, use the STDIO bridge:
 {
   "mcp": {
     "servers": {
-      "tabby-mcp": {
+      "tabby-mcp-server": {
         "type": "stdio",
         "command": "node",
         "args": ["scripts/stdio-bridge.js"],
@@ -353,6 +353,20 @@ This project builds upon the work of [tabby-mcp-server](https://github.com/thuan
 ---
 
 ## 📝 Changelog
+
+### v1.1.3 (2026-01-22)
+
+**Bug Fixes:**
+- 🔧 Fixed `open_profile` sessionId inconsistency - now returns same sessionId as `get_session_list`
+- Fixed SSH connection state detection - `ready` now correctly reflects overall connection status
+
+**Improvements:**
+- Clearer state fields in `open_profile` response:
+  - `tabReady`: Tab/frontend initialized
+  - `sshConnected`: SSH connection established (SSH profiles only)
+  - `ready`: Overall ready state (for SSH: tabReady AND sshConnected)
+- Marked all peerDependencies as optional to prevent unnecessary package downloads
+- Added `tabby-ssh` to devDependencies for developer build stability
 
 ### v1.1.2 (2026-01-22)
 

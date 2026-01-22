@@ -9,7 +9,7 @@
 set -e
 
 REPO="GentlemanHu/Tabby-MCP"
-PLUGIN_NAME="tabby-mcp"
+PLUGIN_NAME="tabby-mcp-server"
 API_URL="https://api.github.com/repos/$REPO/releases/latest"
 
 # Colors for output
@@ -116,7 +116,7 @@ get_latest_release() {
 # Download and extract
 download_and_extract() {
     TEMP_DIR=$(mktemp -d)
-    ARCHIVE_FILE="$TEMP_DIR/tabby-mcp.$ARCHIVE_TYPE"
+    ARCHIVE_FILE="$TEMP_DIR/tabby-mcp-server.$ARCHIVE_TYPE"
     
     echo -e "${YELLOW}📥 Downloading...${NC}"
     curl -L -o "$ARCHIVE_FILE" "$DOWNLOAD_URL" --progress-bar
@@ -130,7 +130,7 @@ download_and_extract() {
     fi
     
     # Find extracted folder
-    EXTRACTED_DIR=$(find "$TEMP_DIR" -maxdepth 1 -type d -name "tabby-mcp*" | head -1)
+    EXTRACTED_DIR=$(find "$TEMP_DIR" -maxdepth 1 -type d -name "tabby-mcp-server*" | head -1)
     
     if [ -z "$EXTRACTED_DIR" ] || [ ! -d "$EXTRACTED_DIR" ]; then
         echo -e "${RED}❌ Extraction failed${NC}"
