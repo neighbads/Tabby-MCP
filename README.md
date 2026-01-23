@@ -20,12 +20,12 @@
 
 ---
 
-> 🚀 **Tabby-MCP** is a powerful plugin for [Tabby Terminal](https://tabby.sh/), bridging the gap between AI agents and your terminal environment. It provides a standardized MCP interface for AI to execute commands, manage tabs, and handle file operations securely.
+> 🚀 **Tabby-MCP** is a powerful plugin for [Tabby Terminal](https://github.com/eugeny/tabby), bridging the gap between AI agents and your terminal environment. It provides a standardized MCP interface for AI to execute commands, manage tabs, and handle file operations securely.
 >
 > *Give your AI hands to work with.*
 
 <div align="center">
-  <video src="assets/tabby-mcp-intro-final.mp4" controls width="100%"></video>
+  <img src="assets/tabby-mcp-intro.gif" width="100%" alt="Tabby-MCP Intro">
 </div>
 
 ---

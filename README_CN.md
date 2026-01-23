@@ -20,12 +20,12 @@
 
 ---
 
-> 🚀 **Tabby-MCP** 是专为 [Tabby Terminal](https://tabby.sh/) 打造的强力插件，旨在弥合 AI Agent 与终端环境之间的鸿沟。它提供了标准化的 MCP 接口，让 AI 能够安全地执行命令、管理标签页并处理文件操作。
+> 🚀 **Tabby-MCP** 是专为 [Tabby Terminal](https://github.com/eugeny/tabby) 打造的强力插件，旨在弥合 AI Agent 与终端环境之间的鸿沟。它提供了标准化的 MCP 接口，让 AI 能够安全地执行命令、管理标签页并处理文件操作。
 >
 > *让你的 AI 拥有操作终端的“双手”。*
 
 <div align="center">
-  <video src="assets/tabby-mcp-intro-final.mp4" controls width="100%"></video>
+  <img src="assets/tabby-mcp-intro.gif" width="100%" alt="Tabby-MCP Intro">
 </div>
 
 ---
