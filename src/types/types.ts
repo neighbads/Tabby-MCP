@@ -64,6 +64,7 @@ export interface McpConfig {
         showConfirmationDialog: boolean;
         autoFocusTerminal: boolean;
     };
+    useStreamCapture?: boolean; // New experimental mode to fix output truncation
 }
 
 /**

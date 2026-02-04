@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { AppService, BaseTabComponent, SplitTabComponent, ConfigService } from 'tabby-core';
 import { z } from 'zod';
+import { BehaviorSubject } from 'rxjs';
 import { BaseToolCategory } from './base-tool-category';
 import { McpLoggerService } from '../services/mcpLogger.service';
 import { McpTool, SFTPFileInfo } from '../types/types';
@@ -29,6 +30,7 @@ interface TransferTask {
     localPath: string;
     remotePath: string;
     sessionId: string;
+    connectionName: string;    // SSH connection title for display
     status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
     progress: number;          // 0-100
     bytesTransferred: number;
@@ -37,6 +39,8 @@ interface TransferTask {
     endTime?: number;
     error?: string;
     speed?: number;            // bytes/sec
+    cancelCallback?: () => void; // Function to force kill the transfer
+    reject?: (reason?: any) => void; // Function to reject the tool promise
 }
 
 /**
@@ -62,6 +66,8 @@ export class SFTPToolCategory extends BaseToolCategory {
 
     // Transfer task queue
     private transferTasks = new Map<string, TransferTask>();
+    private _transferTasksSubject = new BehaviorSubject<TransferTask[]>([]);
+    public readonly transferTasks$ = this._transferTasksSubject.asObservable();
     private maxTransferHistory = 100;
 
     constructor(
@@ -105,6 +111,11 @@ export class SFTPToolCategory extends BaseToolCategory {
         return 'transfer_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 9);
     }
 
+    /** Emit current transfer state to UI subscribers */
+    private emitTransferUpdate(): void {
+        this._transferTasksSubject.next(Array.from(this.transferTasks.values()));
+    }
+
     private cleanupOldTransfers(): void {
         const tasks = Array.from(this.transferTasks.values());
         const completed = tasks.filter(t => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled');
@@ -112,7 +123,57 @@ export class SFTPToolCategory extends BaseToolCategory {
             completed.sort((a, b) => (a.endTime || 0) - (b.endTime || 0));
             const toRemove = completed.slice(0, completed.length - this.maxTransferHistory);
             toRemove.forEach(t => this.transferTasks.delete(t.id));
+            this.emitTransferUpdate();
         }
+    }
+
+    // ============== Public methods for UI ==============
+
+    /** Get current snapshot of all transfers */
+    public getTransfers(): TransferTask[] {
+        return Array.from(this.transferTasks.values());
+    }
+
+    /** Cancel a transfer by ID (for UI button) */
+    public cancelTransferById(transferId: string): boolean {
+        const task = this.transferTasks.get(transferId);
+        if (task && (task.status === 'pending' || task.status === 'running')) {
+            task.status = 'cancelled';
+            task.endTime = Date.now();
+
+            // Force kill the underlying session/stream
+            if (task.cancelCallback) {
+                try {
+                    task.cancelCallback();
+                    this.logger.info(`Called cancel callback for task ${transferId}`);
+                } catch (e) {
+                    this.logger.error(`Error calling cancel callback for ${transferId}:`, e);
+                }
+            }
+
+            // Force reject the promise to unblock MCP tool
+            if (task.reject) {
+                task.reject(new Error('Transfer cancelled by user'));
+            }
+
+            this.emitTransferUpdate();
+            this.logger.info(`Transfer ${transferId} cancelled by user`);
+            return true;
+        }
+        return false;
+    }
+
+    /** Clear all completed/failed/cancelled transfers from history */
+    public clearCompletedTransfers(): void {
+        const toRemove: string[] = [];
+        this.transferTasks.forEach((task, id) => {
+            if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+                toRemove.push(id);
+            }
+        });
+        toRemove.forEach(id => this.transferTasks.delete(id));
+        this.emitTransferUpdate();
+        this.logger.info(`Cleared ${toRemove.length} completed transfers`);
     }
 
     /**
@@ -223,14 +284,18 @@ export class SFTPToolCategory extends BaseToolCategory {
 
     private async getSFTPSession(sshTab: any): Promise<any> {
         try {
-            const cached = this.sftpSessionCache.get(sshTab);
-            if (cached) {
-                return cached;
-            }
-
             const sshSession = sshTab.sshSession;
             if (!sshSession) {
                 return null;
+            }
+
+            // Key the cache by the actual SSH Session object, not the Tab.
+            // This ensures that if the Tab reconnects (getting a new sshSession object),
+            // we automatically get a cache miss and create a new SFTP session.
+            // Old cached sessions will be garbage collected when the old sshSession is destroyed.
+            const cached = this.sftpSessionCache.get(sshSession);
+            if (cached) {
+                return cached;
             }
 
             if (!sshSession.open) {
@@ -242,7 +307,7 @@ export class SFTPToolCategory extends BaseToolCategory {
             }
 
             const sftpSession = await sshSession.openSFTP();
-            this.sftpSessionCache.set(sshTab, sftpSession);
+            this.sftpSessionCache.set(sshSession, sftpSession);
             return sftpSession;
         } catch (error: any) {
             this.logger.error('Failed to open SFTP session:', error.message || error);
@@ -662,6 +727,7 @@ Max upload size is configurable in Tabby Settings → MCP → SFTP.`,
                     localPath: params.localPath,
                     remotePath: params.remotePath,
                     sessionId: session.sessionId,
+                    connectionName: session.tab.title || 'SSH Connection',
                     status: 'pending',
                     progress: 0,
                     bytesTransferred: 0,
@@ -669,20 +735,33 @@ Max upload size is configurable in Tabby Settings → MCP → SFTP.`,
                     startTime: Date.now()
                 };
                 this.transferTasks.set(transferId, task);
+                this._transferTasksSubject.next(Array.from(this.transferTasks.values()));
                 this.cleanupOldTransfers();
 
                 const sync = params.sync !== false;
 
                 const doUpload = async () => {
+                    task.status = 'running';
+                    this.emitTransferUpdate();
                     let fileUpload: StreamFileUpload | undefined;
                     try {
-                        const sftp = await this.getSFTPSession(session.tab);
-                        if (!sftp) {
+                        const sftpSession = await this.getSFTPSession(session.tab);
+                        if (!sftpSession) {
                             throw new Error('Could not open SFTP session');
                         }
 
-                        // Create stream-based upload adapter
-                        // This reads the file in chunks on demand, avoiding OOM on large files
+                        // Bind cancel callback to force close session on user cancel
+                        task.cancelCallback = () => {
+                            this.logger.warn(`[SFTP] Force cancelling upload: ${transferId}`);
+                            try {
+                                if (fileUpload) fileUpload.cancel();
+                                sftpSession.end();
+                            } catch (e) {
+                                this.logger.error('[SFTP] Error cancelling upload:', e);
+                            }
+                        };
+
+                        // Use Tabby's official SFTP API (russh-based)
                         fileUpload = new StreamFileUpload(
                             params.localPath,
                             stats.size,
@@ -693,17 +772,18 @@ Max upload size is configurable in Tabby Settings → MCP → SFTP.`,
                             }
                         );
 
-                        // Upload using Tabby's API
-                        await sftp.upload(params.remotePath, fileUpload);
+                        await sftpSession.upload(params.remotePath, fileUpload);
 
                         task.status = 'completed';
                         task.progress = 100;
                         task.bytesTransferred = task.totalBytes;
                         task.endTime = Date.now();
+                        this.emitTransferUpdate();
                     } catch (error: any) {
                         task.status = 'failed';
                         task.error = error.message || String(error);
                         task.endTime = Date.now();
+                        this.emitTransferUpdate();
 
                         // Try to cancel/close if running
                         if (fileUpload) {
@@ -843,6 +923,7 @@ Max download size is configurable in Tabby Settings → MCP → SFTP.`,
                         localPath: params.localPath,
                         remotePath: params.remotePath,
                         sessionId: session.sessionId,
+                        connectionName: session.tab.title || 'SSH Connection',
                         status: 'pending',
                         progress: 0,
                         bytesTransferred: 0,
@@ -850,16 +931,33 @@ Max download size is configurable in Tabby Settings → MCP → SFTP.`,
                         startTime: Date.now()
                     };
                     this.transferTasks.set(transferId, task);
+                    this._transferTasksSubject.next(Array.from(this.transferTasks.values()));
                     this.cleanupOldTransfers();
 
                     const sync = params.sync !== false;
 
-                    let fileDownload: StreamFileDownload | undefined;
                     const doDownload = async () => {
                         task.status = 'running';
+                        this.emitTransferUpdate();
+                        let fileDownload: StreamFileDownload | undefined;
                         try {
-                            // Create stream-based download adapter
-                            // This writes to disk immediately in chunks
+                            const sftpSession = await this.getSFTPSession(session.tab);
+                            if (!sftpSession) {
+                                throw new Error('Could not open SFTP session');
+                            }
+
+                            // Bind cancel callback to force close session on user cancel
+                            task.cancelCallback = () => {
+                                this.logger.warn(`[SFTP] Force cancelling download: ${transferId}`);
+                                try {
+                                    if (fileDownload) fileDownload.cancel();
+                                    sftpSession.end();
+                                } catch (e) {
+                                    this.logger.error('[SFTP] Error cancelling download:', e);
+                                }
+                            };
+
+                            // Use Tabby's official SFTP API (russh-based)
                             fileDownload = new StreamFileDownload(
                                 params.localPath,
                                 remoteStats.size,
@@ -870,19 +968,18 @@ Max download size is configurable in Tabby Settings → MCP → SFTP.`,
                                 }
                             );
 
-                            // Download using Tabby's API
-                            await sftp.download(params.remotePath, fileDownload);
-
-                            // No need to write file manually, StreamFileDownload does it on the fly
+                            await sftpSession.download(params.remotePath, fileDownload);
 
                             task.status = 'completed';
                             task.progress = 100;
                             task.bytesTransferred = task.totalBytes;
                             task.endTime = Date.now();
+                            this.emitTransferUpdate();
                         } catch (error: any) {
                             task.status = 'failed';
                             task.error = error.message || String(error);
                             task.endTime = Date.now();
+                            this.emitTransferUpdate();
 
                             // Try to cancel/close if running
                             if (fileDownload) {

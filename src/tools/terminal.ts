@@ -2,7 +2,7 @@ import { Injectable } from '@angular/core';
 import { AppService, BaseTabComponent, ConfigService, SplitTabComponent } from 'tabby-core';
 import { BaseTerminalTabComponent, XTermFrontend } from 'tabby-terminal';
 import { SerializeAddon } from '@xterm/addon-serialize';
-import { BehaviorSubject } from 'rxjs';
+import { BehaviorSubject, Subscription, Subject, ReplaySubject, firstValueFrom } from 'rxjs';
 import { z } from 'zod';
 import { BaseToolCategory } from './base-tool-category';
 import { McpLoggerService } from '../services/mcpLogger.service';
@@ -471,15 +471,41 @@ For long-running commands, increase timeout or use waitForOutput=false and poll 
                     this._activeCommands.set(session.sessionId, activeCommand);
                     this._activeCommandsSubject.next(new Map(this._activeCommands));
 
+                    // Setup Stream Capture if enabled
+                    const useStreamCapture = this.config.store.mcp?.useStreamCapture ?? false;
+                    let outputStream$: ReplaySubject<string> | undefined;
+                    let rawSubscription: Subscription | undefined;
+
+                    if (useStreamCapture) {
+                        const sessionAny = session.tab.session as any;
+                        if (sessionAny?.output$) {
+                            outputStream$ = new ReplaySubject<string>();
+                            rawSubscription = sessionAny.output$.subscribe(outputStream$);
+                            this.logger.debug(`[Exec] Stream capture enabled for session ${session.sessionId}`);
+                        } else {
+                            this.logger.warn(`[Exec] Stream capture requested but output$ unavailable. Fallback to buffer.`);
+                        }
+                    }
+
                     // Send command with markers - use shell-aware wrapper
                     const detectedShell = this.detectShellType(session);
                     const wrappedCommand = this.getWrappedCommand(command, startMarker, endMarker, detectedShell);
                     session.tab.sendInput(wrappedCommand + '\n');
 
-                    this.logger.info(`Executing command: ${command} in session ${session.sessionId} (shell: ${detectedShell})`);
+                    this.logger.info(`Executing command: ${command} in session ${session.sessionId} (shell: ${detectedShell}, stream: ${!!outputStream$})`);
 
                     // Wait for output
-                    const result = await this.waitForCommandOutput(session, startMarker, endMarker, timeout, () => aborted);
+                    let result: CommandResult;
+                    if (outputStream$) {
+                        result = await this.waitForCommandOutputViaStream(outputStream$, startMarker, endMarker, timeout, () => aborted, session);
+                    } else {
+                        result = await this.waitForCommandOutputViaBuffer(session, startMarker, endMarker, timeout, () => aborted);
+                    }
+
+                    // Clean up stream resources
+                    if (rawSubscription) {
+                        rawSubscription.unsubscribe();
+                    }
 
                     // Clean up active command
                     this._activeCommands.delete(session.sessionId);
@@ -498,6 +524,37 @@ For long-running commands, increase timeout or use waitForOutput=false and poll 
                 }
             }
         };
+    }
+
+    /**
+     * Check if a session is valid (tab exists and is connected)
+     * Returns true if valid, throws error if invalid
+     */
+    private ensureSessionValid(session: TerminalSessionWithTab): void {
+        const tabAny = session.tab as any;
+        const sessionObj = tabAny.session;
+
+        // Debug log to analyze tab state
+        // NOTE: tab.destroyed is a Subject<void>, NOT a boolean! Only check session.open
+        this.logger.debug(`[ensureSessionValid] Checking session ${session.sessionId}: hasSession=${!!sessionObj}, sessionOpen=${sessionObj?.open}`);
+
+        if (sessionObj && sessionObj.open === false) {
+            this.logger.warn(`[ensureSessionValid] Session ${session.sessionId} disconnected: session.open=false`);
+
+            // Remove from active commands but DO NOT throw error yet to avoid false positives
+            // until we confirm this logic covers all valid states (e.g. some session types might not have 'open' prop)
+            if (this._activeCommands.has(session.sessionId)) {
+                // Only strict abort if we are 100% sure. For now, let's just log.
+                // const activeCmd = this._activeCommands.get(session.sessionId);
+                // activeCmd?.abort();
+                // this._activeCommands.delete(session.sessionId);
+                // this._activeCommandsSubject.next(new Map(this._activeCommands));
+            }
+
+            // PER USER REQUEST: Do not block execution if logic is uncertain. 
+            // Just warn for now.
+            // throw new Error(`Session ${session.sessionId} is disconnected or tab is closed`);
+        }
     }
 
     /**
@@ -533,6 +590,14 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
                     };
                 }
 
+                try {
+                    this.ensureSessionValid(session);
+                } catch (error: any) {
+                    return {
+                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: error.message }) }]
+                    };
+                }
+
                 // Process escape sequences
                 const processedInput = input
                     .replace(/\\n/g, '\n')
@@ -540,12 +605,25 @@ Special keys: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\x1b (Escape), \\r (Enter)`,
                     .replace(/\\t/g, '\t')
                     .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 
-                session.tab.sendInput(processedInput);
-                this.logger.info(`Sent input to session ${session.sessionId}: ${input.substring(0, 50)}${input.length > 50 ? '...' : ''}`);
+                try {
+                    session.tab.sendInput(processedInput);
+                    this.logger.info(`Sent input to session ${session.sessionId}`);
 
-                return {
-                    content: [{ type: 'text', text: JSON.stringify({ success: true, sessionId: session.sessionId, message: 'Input sent' }) }]
-                };
+                    return {
+                        content: [{ type: 'text', text: JSON.stringify({ success: true, sessionId: session.sessionId, message: 'Input sent' }) }]
+                    };
+                } catch (error: any) {
+                    this.logger.error(`Error sending input to session ${session.sessionId}:`, error);
+                    return {
+                        content: [{
+                            type: 'text', text: JSON.stringify({
+                                success: false,
+                                error: `Failed to send input: ${error.message}. Session might be disconnected.`,
+                                sessionId: session.sessionId
+                            })
+                        }]
+                    };
+                }
             }
         };
     }
@@ -589,6 +667,14 @@ Session targeting: sessionId (recommended) > tabIndex > title > profileName`,
                                 hint: 'Use get_session_list to see available sessions'
                             })
                         }]
+                    };
+                }
+
+                try {
+                    this.ensureSessionValid(session);
+                } catch (error: any) {
+                    return {
+                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: error.message }) }]
                     };
                 }
 
@@ -845,7 +931,7 @@ After focusing, commands sent to that split tab will go to the focused pane.`,
      * Wait for command output between markers
      * Timing is configurable via Settings → MCP → Timing
      */
-    private async waitForCommandOutput(
+    private async waitForCommandOutputViaBuffer(
         session: TerminalSessionWithTab,
         startMarker: string,
         endMarker: string,
@@ -869,6 +955,20 @@ After focusing, commands sent to that split tab will go to the focused pane.`,
         while (Date.now() - startTime < timeout) {
             if (isAborted()) {
                 return { success: false, output: '', error: 'Command aborted' };
+            }
+
+            // Check if session is still valid - abort immediately if disconnected
+            // NOTE: tab.destroyed is a Subject<void>, NOT a boolean! Only check session.open
+            const tabAny = session.tab as any;
+            const sessionObj = tabAny.session;
+            if (sessionObj && sessionObj.open === false) {
+                this.logger.warn(`[waitForCommandOutput] Session ${session.sessionId} disconnected: session.open=false`);
+                return {
+                    success: false,
+                    output: '',
+                    error: 'Session disconnected during execution',
+                    exitCode: -1
+                };
             }
 
             const buffer = this.getTerminalBufferText(session);
@@ -896,6 +996,25 @@ After focusing, commands sent to that split tab will go to the focused pane.`,
                     }
 
                     const exitCode = parseInt(endMatch[1], 10);
+
+                    return {
+                        success: exitCode === 0,
+                        output,
+                        exitCode
+                    };
+                } else if (startIndex === -1) {
+                    // Start marker not found, but End marker IS found.
+                    // This likely means the output was too long and the start marker scrolled off the buffer.
+                    // We should return what we have instead of hanging.
+                    this.logger.warn(`[waitForCommandOutput] Start marker not found, but end marker found. Output likely truncated. Session: ${session.sessionId}`);
+
+                    let output = buffer.substring(0, endIndex).trim();
+                    const exitCode = parseInt(endMatch[1], 10);
+
+                    // Try to clean up command echo if it appears at the very top (unlikely in this case, but good practice)
+                    const lines = output.split('\n');
+                    // Add a warning note to the output so the user/LLM knows it's truncated
+                    output = `[MCP Warning: Output truncated, start marker missing]\n${output}`;
 
                     return {
                         success: exitCode === 0,
@@ -939,5 +1058,138 @@ After focusing, commands sent to that split tab will go to the focused pane.`,
         }
 
         return { success: false, output: '', error: 'Command timeout' };
+    }
+    /**
+     * Wait for command output using Stream Capture (Observable)
+     * This bypasses the terminal buffer limit and works for huge outputs
+     */
+    private async waitForCommandOutputViaStream(
+        outputStream$: ReplaySubject<string>,
+        startMarker: string,
+        endMarker: string,
+        timeout: number,
+        isAborted: () => boolean,
+        session: TerminalSessionWithTab
+    ): Promise<CommandResult> {
+        let buffer = '';
+        // eslint-disable-next-line prefer-const
+        let subscription: Subscription;
+
+        return new Promise<CommandResult>((resolve) => {
+            let resolved = false; // Prevent double resolution
+
+            const timeoutId = setTimeout(() => {
+                if (resolved) return;
+                resolved = true;
+                cleanup();
+                // Timeout logic
+                const startIndex = buffer.lastIndexOf(startMarker);
+                if (startIndex !== -1) {
+                    let partialOutput = buffer.substring(startIndex + startMarker.length).trim();
+                    // Clean echo
+                    const lines = partialOutput.split('\n');
+                    if (lines.length > 0 && lines[0].includes('&&')) {
+                        lines.shift();
+                        partialOutput = lines.join('\n').trim();
+                    }
+                    resolve({
+                        success: false,
+                        output: partialOutput,
+                        error: 'Command timeout (partial output captured via stream)',
+                        exitCode: -1
+                    });
+                } else {
+                    resolve({ success: false, output: '', error: 'Command timeout' });
+                }
+            }, timeout);
+
+            // Health check for session disconnect (check every 500ms)
+            // NOTE: tab.destroyed is a Subject<void>, NOT a boolean! Only check session.open
+            const healthCheckId = setInterval(() => {
+                if (resolved) {
+                    clearInterval(healthCheckId);
+                    return;
+                }
+                const tabAny = session.tab as any;
+                const sessionObj = tabAny.session;
+                if (sessionObj && sessionObj.open === false) {
+                    this.logger.warn(`[StreamCapture] Session ${session.sessionId} disconnected: session.open=false`);
+                    resolved = true;
+                    cleanup();
+                    resolve({
+                        success: false,
+                        output: '',
+                        error: 'Session disconnected during execution',
+                        exitCode: -1
+                    });
+                }
+            }, 500);
+
+            const cleanup = () => {
+                clearTimeout(timeoutId);
+                clearInterval(healthCheckId);
+                if (subscription) {
+                    subscription.unsubscribe();
+                }
+            };
+
+            subscription = outputStream$.subscribe({
+                next: (data) => {
+                    if (resolved) return;
+
+                    if (isAborted()) {
+                        resolved = true;
+                        cleanup();
+                        resolve({ success: false, output: '', error: 'Command aborted' });
+                        return;
+                    }
+
+                    buffer += data;
+
+                    // Look for end marker
+                    const endPattern = new RegExp(`${endMarker}\\s+(\\d+)`, 'm');
+                    const endMatch = buffer.match(endPattern);
+
+                    if (endMatch) {
+                        resolved = true;
+                        cleanup();
+                        const endIndex = buffer.indexOf(endMatch[0]);
+                        const startIndex = buffer.lastIndexOf(startMarker, endIndex);
+
+                        let output = '';
+                        if (startIndex !== -1) {
+                            output = buffer.substring(startIndex + startMarker.length, endIndex).trim();
+                        } else {
+                            // Should not happen with ReplaySubject, but safe fallback
+                            this.logger.warn(`[StreamCapture] Start marker missing but end marker found. Output truncated?`);
+                            output = buffer.substring(0, endIndex).trim();
+                        }
+
+                        // Remove command echo
+                        const lines = output.split('\n');
+                        if (lines.length > 0 && lines[0].includes(startMarker.slice(0, 10))) {
+                            lines.shift();
+                            output = lines.join('\n').trim();
+                        } else if (lines.length > 0 && lines[0].includes('&&')) { // Fallback check
+                            lines.shift();
+                            output = lines.join('\n').trim();
+                        }
+
+                        const exitCode = parseInt(endMatch[1], 10);
+                        resolve({
+                            success: exitCode === 0,
+                            output,
+                            exitCode
+                        });
+                    }
+                },
+                error: (err) => {
+                    if (resolved) return;
+                    resolved = true;
+                    cleanup();
+                    resolve({ success: false, output: '', error: `Stream error: ${err.message}` });
+                }
+            });
+        });
     }
 }

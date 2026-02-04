@@ -4,6 +4,7 @@ import { Subscription } from 'rxjs';
 import { McpService } from '../services/mcpService';
 import { McpLoggerService } from '../services/mcpLogger.service';
 import { McpI18nService } from '../services/i18n.service';
+import { SFTPToolCategory } from '../tools/sftp';
 import { PLUGIN_VERSION } from '../version';
 
 /**
@@ -44,6 +45,9 @@ import { PLUGIN_VERSION } from '../version';
           </button>
           <button class="btn btn-outline-info" (click)="openMonitor()" title="Monitor Connections">
             📋 Connections
+          </button>
+          <button class="btn btn-outline-success" (click)="openTransferMonitor()" title="SFTP Transfers">
+            📤 Transfers
           </button>
         </div>
       </div>
@@ -209,6 +213,25 @@ import { PLUGIN_VERSION } from '../version';
           <li>{{ t('mcp.backgroundExecution.safety.sessionId') }}</li>
           <li>{{ t('mcp.backgroundExecution.safety.monitor') }}</li>
         </ul>
+      </div>
+
+      <hr />
+
+      <h4>🧪 {{ t('mcp.experimental.title') || 'Experimental Features' }}</h4>
+
+      <div class="form-group">
+        <div class="checkbox">
+          <label>
+            <input type="checkbox" [(ngModel)]="config.store.mcp.useStreamCapture" (change)="saveConfig()">
+            {{ t('mcp.experimental.streamCapture.label') }}
+          </label>
+        </div>
+        <small class="form-text text-muted">
+            {{ t('mcp.experimental.streamCapture.desc') }}
+        </small>
+        <div class="alert alert-info mt-2" *ngIf="config.store.mcp.useStreamCapture">
+            <strong>ℹ️ Note:</strong> {{ t('mcp.experimental.streamCapture.note') }}
+        </div>
       </div>
 
       <hr />
@@ -393,6 +416,71 @@ import { PLUGIN_VERSION } from '../version';
           <div class="modal-header" style="border-top: 1px solid rgba(255,255,255,0.1); border-bottom: none; justify-content: flex-end; padding: 0.75rem;">
              <button class="btn btn-secondary btn-sm" (click)="refreshSessions()">Refresh</button>
              <button class="btn btn-primary btn-sm ml-2" (click)="closeMonitor()">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Transfer Monitor Modal -->
+      <div class="modal-overlay" *ngIf="showTransferMonitor" (click)="closeTransferMonitor()">
+        <div class="modal-content" (click)="$event.stopPropagation()">
+          <div class="modal-header">
+            <h4>📤 SFTP Transfers ({{ transfers.length }})</h4>
+            <button class="action-btn" (click)="closeTransferMonitor()">✕</button>
+          </div>
+          <div class="modal-body">
+            <table class="session-table">
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>File</th>
+                  <th>Connection</th>
+                  <th>Progress</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr *ngFor="let t of transfers">
+                  <td>
+                    <span class="transfer-type" [class.upload]="t.type==='upload'" [class.download]="t.type==='download'">
+                      {{ t.type === 'upload' ? '↑' : '↓' }}
+                    </span>
+                  </td>
+                  <td>
+                    <div class="mono" title="{{t.remotePath}}">{{ getFileName(t.remotePath) }}</div>
+                    <div style="font-size:0.75em; opacity:0.5">{{ t.remotePath }}</div>
+                  </td>
+                  <td>{{ t.connectionName }}</td>
+                  <td>
+                    <div class="progress-bar-container">
+                      <div class="progress-bar-fill" [style.width.%]="t.progress"></div>
+                      <span class="progress-text">{{ t.progress }}%</span>
+                    </div>
+                    <div style="font-size:0.75em; opacity:0.6">
+                      <span *ngIf="t.speed">{{ formatBytes(t.speed) }}/s</span>
+                      <span *ngIf="t.bytesTransferred"> · {{ formatBytes(t.bytesTransferred) }} / {{ formatBytes(t.totalBytes) }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <span class="status-badge" [class.pending]="t.status==='pending'" [class.running]="t.status==='running'"
+                          [class.completed]="t.status==='completed'" [class.failed]="t.status==='failed'" [class.cancelled]="t.status==='cancelled'">
+                      {{ t.status }}
+                    </span>
+                  </td>
+                  <td>
+                    <button class="action-btn btn-danger-sm" (click)="cancelTransfer(t.id)" *ngIf="t.status==='pending' || t.status==='running'">Cancel</button>
+                  </td>
+                </tr>
+                <tr *ngIf="transfers.length === 0">
+                  <td colspan="6" style="text-align: center; padding: 2rem; opacity: 0.6">No transfers</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="modal-header" style="border-top: 1px solid rgba(255,255,255,0.1); border-bottom: none; justify-content: flex-end; padding: 0.75rem;">
+             <button class="btn btn-secondary btn-sm" (click)="clearCompletedTransfers()">Clear History</button>
+             <button class="btn btn-secondary btn-sm ml-2" (click)="refreshTransfers()">Refresh</button>
+             <button class="btn btn-primary btn-sm ml-2" (click)="closeTransferMonitor()">Close</button>
           </div>
         </div>
       </div>
@@ -611,6 +699,47 @@ import { PLUGIN_VERSION } from '../version';
       margin: 0;
       padding-left: 1.2em;
     }
+    /* Transfer Monitor Styles */
+    .transfer-type {
+      font-size: 1.2em;
+      font-weight: bold;
+    }
+    .transfer-type.upload { color: #28a745; }
+    .transfer-type.download { color: #17a2b8; }
+    .progress-bar-container {
+      width: 120px;
+      height: 18px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 4px;
+      position: relative;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #28a745, #5cb85c);
+      transition: width 0.3s ease;
+    }
+    .progress-text {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75em;
+      font-weight: bold;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 0.2em 0.5em;
+      font-size: 0.8em;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    .status-badge.pending { background: #6c757d; color: white; }
+    .status-badge.running { background: #17a2b8; color: white; }
+    .status-badge.completed { background: #28a745; color: white; }
+    .status-badge.failed { background: #dc3545; color: white; }
+    .status-badge.cancelled { background: #ffc107; color: black; }
   `]
 })
 export class McpSettingsTabComponent implements OnInit, OnDestroy {
@@ -622,7 +751,8 @@ export class McpSettingsTabComponent implements OnInit, OnDestroy {
     public config: ConfigService,
     private mcpService: McpService,
     private logger: McpLoggerService,
-    private i18n: McpI18nService
+    private i18n: McpI18nService,
+    private sftpTools: SFTPToolCategory
   ) { }
 
   ngOnInit(): void {
@@ -655,17 +785,17 @@ export class McpSettingsTabComponent implements OnInit, OnDestroy {
       this.config.store.mcp.sftp = {
         enabled: true,
         maxFileSize: 1024 * 1024,      // 1MB for read
-        maxUploadSize: 10 * 1024 * 1024,   // 10MB for upload
-        maxDownloadSize: 10 * 1024 * 1024, // 10MB for download
+        maxUploadSize: 10 * 1024 * 1024 * 1024,   // 10GB for upload
+        maxDownloadSize: 10 * 1024 * 1024 * 1024, // 10GB for download
         timeout: 60000
       };
     }
     // Ensure new fields exist on existing config
     if (this.config.store.mcp.sftp.maxUploadSize === undefined) {
-      this.config.store.mcp.sftp.maxUploadSize = 10 * 1024 * 1024;
+      this.config.store.mcp.sftp.maxUploadSize = 10 * 1024 * 1024 * 1024;
     }
     if (this.config.store.mcp.sftp.maxDownloadSize === undefined) {
-      this.config.store.mcp.sftp.maxDownloadSize = 10 * 1024 * 1024;
+      this.config.store.mcp.sftp.maxDownloadSize = 10 * 1024 * 1024 * 1024;
     }
   }
 
@@ -840,5 +970,51 @@ export class McpSettingsTabComponent implements OnInit, OnDestroy {
 
   formatTime(ms: number): string {
     return new Date(ms).toLocaleTimeString();
+  }
+
+  // ============== Transfer Monitor ==============
+
+  showTransferMonitor = false;
+  transfers: any[] = [];
+  private transferSub?: Subscription;
+
+  openTransferMonitor(): void {
+    this.refreshTransfers();
+    // Subscribe to real-time updates
+    this.transferSub = this.sftpTools.transferTasks$.subscribe(tasks => {
+      this.transfers = tasks;
+    });
+    this.showTransferMonitor = true;
+  }
+
+  closeTransferMonitor(): void {
+    this.showTransferMonitor = false;
+    this.transferSub?.unsubscribe();
+  }
+
+  refreshTransfers(): void {
+    this.transfers = this.sftpTools.getTransfers();
+  }
+
+  cancelTransfer(transferId: string): void {
+    this.sftpTools.cancelTransferById(transferId);
+    this.refreshTransfers();
+  }
+
+  clearCompletedTransfers(): void {
+    this.sftpTools.clearCompletedTransfers();
+    this.refreshTransfers();
+  }
+
+  getFileName(filePath: string): string {
+    return filePath.split('/').pop() || filePath;
+  }
+
+  formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 }

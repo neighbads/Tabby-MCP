@@ -447,6 +447,23 @@ This project builds upon the work of [tabby-mcp-server](https://github.com/thuan
 - All dependencies (express, zod, @modelcontextprotocol/sdk) are now bundled into dist/index.js
 - Installing from npm/Tabby store no longer downloads unnecessary packages
 
+### v1.3.0 (2026-02-04)
+
+**Bug Fixes:**
+- 🔧 Fixed session disconnect false positives - `exec_command` and `send_input` no longer incorrectly report "Session disconnected"
+  - Root cause: `tab.destroyed` is a `Subject<void>` (RxJS Observable), NOT a boolean
+  - Now correctly uses `session.open === false` for disconnect detection
+
+**Cleanup:**
+- 🗑️ Removed non-functional SFTP "Advanced Tuning" settings (Chunk Size, Concurrency)
+  - These had no effect with Tabby's `russh`-based SFTP implementation
+- 🗑️ Removed obsolete `fastPut`/`fastGet` detection code
+
+**i18n:**
+- ✏️ Fixed SFTP size descriptions: corrected "10 MB" → "10 GB" in all translations
+
+---
+
 ### v1.1.1 (2026-01-21)
 
 **Bug Fixes:**
