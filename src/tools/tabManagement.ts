@@ -140,7 +140,7 @@ export class TabManagementToolCategory extends BaseToolCategory {
         // Priority 3: title (partial match, case-insensitive)
         if (locator.title) {
             const titleLower = locator.title.toLowerCase();
-            const found = this.app.tabs.find(tab => tab.title?.toLowerCase().includes(titleLower));
+            const found = this.app.tabs.find(tab => tab.customTitle?.toLowerCase().includes(titleLower) || tab.title?.toLowerCase().includes(titleLower));
             if (found) {
                 this.logger.debug(`Found tab by title: ${locator.title}`);
                 return found;
@@ -164,7 +164,7 @@ Use tabId (stable) for reliable tab targeting; tabIndex may change if tabs are r
                     return {
                         tabId: this.getOrCreateTabId(tab),
                         tabIndex: index,
-                        title: tab.title || `Tab ${index}`,
+                        title: tab.customTitle || tab.title || `Tab ${index}`,
                         type: tab.constructor.name,
                         isActive: this.app.activeTab === tab,
                         hasFocus: tab.hasFocus,
