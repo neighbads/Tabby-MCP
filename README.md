@@ -6,7 +6,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
 [![Tabby Plugin](https://img.shields.io/badge/Tabby-Plugin-purple.svg)](https://tabby.sh/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Protocol-orange.svg)](https://modelcontextprotocol.io/)
-[![GitHub Release](https://img.shields.io/github/v/release/GentlemanHu/Tabby-MCP?color=green)](https://github.com/GentlemanHu/Tabby-MCP/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/neighbads/Tabby-MCP?color=green)](https://github.com/neighbads/Tabby-MCP/releases)
 [![AI Generated](https://img.shields.io/badge/AI%20Generated-95%25-ff69b4.svg)](#-about-this-project)
 [![Tested on](https://img.shields.io/badge/Tested%20on-macOS-lightgrey.svg)](#%EF%B8%8F-platform-support)
 
@@ -106,12 +106,12 @@ Search for `tabby-mcp-server` directly in Tabby's built-in Plugin Manager:
 <summary><b>🍎 macOS / 🐧 Linux</b></summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GentlemanHu/Tabby-MCP/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/neighbads/Tabby-MCP/main/scripts/install.sh | bash
 ```
 
 Or download and run:
 ```bash
-wget https://raw.githubusercontent.com/GentlemanHu/Tabby-MCP/main/scripts/install.sh
+wget https://raw.githubusercontent.com/neighbads/Tabby-MCP/main/scripts/install.sh
 bash install.sh
 ```
 
@@ -121,12 +121,12 @@ bash install.sh
 <summary><b>🪟 Windows (PowerShell)</b></summary>
 
 ```powershell
-irm https://raw.githubusercontent.com/GentlemanHu/Tabby-MCP/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/neighbads/Tabby-MCP/main/scripts/install.ps1 | iex
 ```
 
 Or download and run:
 ```powershell
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/GentlemanHu/Tabby-MCP/main/scripts/install.ps1 -OutFile install.ps1
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/neighbads/Tabby-MCP/main/scripts/install.ps1 -OutFile install.ps1
 .\install.ps1
 ```
 
@@ -140,7 +140,7 @@ Requires **Node.js 18+**.
 
 ```bash
 # Clone
-git clone https://github.com/GentlemanHu/Tabby-MCP.git
+git clone https://github.com/neighbads/Tabby-MCP.git
 cd Tabby-MCP
 
 # Build & Install

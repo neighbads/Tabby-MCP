@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$Repo = "GentlemanHu/Tabby-MCP"
+$Repo = "neighbads/Tabby-MCP"
 $PluginName = "tabby-mcp-server"
 $ApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
 $TabbyPluginDir = Join-Path $env:APPDATA "tabby\plugins\node_modules\$PluginName"

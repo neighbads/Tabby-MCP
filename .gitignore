@@ -36,6 +36,10 @@ coverage/
 # Temp
 *.tmp
 *.temp
+*.bin
+*.dl
 .cache/
 
 .agent/
+/tabby-mcp-server
+/release

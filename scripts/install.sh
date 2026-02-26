@@ -8,7 +8,7 @@
 
 set -e
 
-REPO="GentlemanHu/Tabby-MCP"
+REPO="neighbads/Tabby-MCP"
 PLUGIN_NAME="tabby-mcp-server"
 API_URL="https://api.github.com/repos/$REPO/releases/latest"
 

@@ -19,12 +19,12 @@ import * as os from 'os';
         <h3>🔌 {{ t('mcp.settings.title') }}</h3>
         <div class="header-right">
           <div class="header-icons">
-            <span class="header-icon" (click)="openUrl('https://github.com/GentlemanHu/Tabby-MCP')" title="GitHub">🐙</span>
+            <span class="header-icon" (click)="openUrl('https://github.com/neighbads/Tabby-MCP')" title="GitHub">🐙</span>
             <span class="header-icon" (click)="openUrl('https://www.npmjs.com/package/tabby-mcp-server')" title="npm">📦</span>
-            <span class="header-icon" (click)="openUrl('https://github.com/GentlemanHu/Tabby-MCP/issues')" title="{{ t('mcp.about.issues') }}">🐛</span>
-            <span class="header-icon" (click)="openUrl('mailto:justfeelingme@gmail.com')" title="Email">✉️</span>
+            <span class="header-icon" (click)="openUrl('https://github.com/neighbads/Tabby-MCP/issues')" title="{{ t('mcp.about.issues') }}">🐛</span>
+            <span class="header-icon" (click)="openUrl('mailto:neighbads@gmail.com')" title="Email">✉️</span>
           </div>
-          <span class="version-badge" (click)="openUrl('https://github.com/GentlemanHu/Tabby-MCP/releases')">v{{ version }}</span>
+          <span class="version-badge" (click)="openUrl('https://github.com/neighbads/Tabby-MCP/releases')">v{{ version }}</span>
         </div>
       </div>
       
