@@ -2,6 +2,23 @@
 
 All notable changes to Tabby-MCP will be documented in this file.
 
+## [1.4.0] - 2026-02-26
+
+### 🆕 Added
+- **HTTP streaming SFTP transfer**: New endpoints `POST /api/sftp/upload` and `GET /api/sftp/download` for cross-machine file transfer (A → B → C) without temp files on Tabby host
+  - Supports `multipart/form-data` and `application/octet-stream` upload modes
+  - Backpressure handling for upload (chunk queue with pause/resume) and download (`drain` event)
+  - Transfer tasks visible in Tabby UI during HTTP transfers
+- **Remote Call Address setting**: Auto-detects local IP, configurable in Settings → MCP
+- **useHttpEndpoints option**: When enabled, `sftp_upload`/`sftp_download` return curl commands directly instead of performing local file operations, useful for cross-machine scenarios
+
+### 🔧 Fixed
+- HTTP upload premature cancel — `req.on('close')` was firing after body receipt, now uses `req.complete` guard
+- Tab title not reflecting user customTitle — `get_session_list`, `list_tabs` and title matching now prefer `customTitle` over `title`
+- Hardcoded version `1.1.3` in `/health` and `/info` endpoints — now uses `PLUGIN_VERSION` from package.json
+
+---
+
 ## [1.3.0] - 2026-02-04
 
 ### 🔧 Fixed
