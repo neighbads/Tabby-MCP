@@ -31,29 +31,28 @@ jobs:
       
       - name: Create release archive
         run: |
-          mkdir -p release/tabby-mcp
-          cp -r dist release/tabby-mcp/
-          cp -r typings release/tabby-mcp/
-          cp package.json release/tabby-mcp/
-          cd release && zip -r ../tabby-mcp-${{ github.ref_name }}.zip tabby-mcp
-          cd .. && tar -czvf tabby-mcp-${{ github.ref_name }}.tar.gz -C release tabby-mcp
-      
+          mkdir -p release/tabby-mcp-server
+          cp -r dist release/tabby-mcp-server/
+          cp -r typings release/tabby-mcp-server/
+          cp package.json release/tabby-mcp-server/
+          cp README.md README_CN.md CHANGELOG.md CHANGELOG_CN.md release/tabby-mcp-server/
+          cd release && zip -r ../tabby-mcp-server-${{ github.ref_name }}.zip tabby-mcp-server
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tabby-mcp-build
+          name: tabby-mcp-server-build
           path: |
             dist/
             typings/
             package.json
-      
+
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            tabby-mcp-${{ github.ref_name }}.zip
-            tabby-mcp-${{ github.ref_name }}.tar.gz
+            tabby-mcp-server-${{ github.ref_name }}.zip
           generate_release_notes: true
           draft: false
           prerelease: false
@@ -61,10 +60,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Publish to npm
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && env.NPM_TOKEN != ''
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   build-check:
     runs-on: ubuntu-latest
