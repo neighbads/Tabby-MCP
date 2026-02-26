@@ -71,6 +71,7 @@
         <li>List/read/write remote files</li>
         <li>Create/delete directories</li>
         <li>Rename/move files</li>
+        <li><b>HTTP streaming transfer</b></li>
         <li><i>(Requires tabby-ssh)</i></li>
       </ul>
     </td>
@@ -222,6 +223,8 @@ For clients that don't support SSE, use the STDIO bridge:
 |----------|-----|----------|
 | Streamable HTTP | `http://localhost:3001/mcp` | 2025-03-26 (recommended) |
 | Legacy SSE | `http://localhost:3001/sse` | 2024-11-05 |
+| SFTP Upload | `POST http://localhost:3001/api/sftp/upload` | HTTP streaming |
+| SFTP Download | `GET http://localhost:3001/api/sftp/download` | HTTP streaming |
 | Health | `http://localhost:3001/health` | - |
 | Info | `http://localhost:3001/info` | - |
 
@@ -298,8 +301,32 @@ For clients that don't support SSE, use the STDIO bridge:
 | `sftp_cancel_transfer` | Cancel active transfer | `transferId` |
 
 > **Transfer Modes**: `sync=true` (default) waits for completion. `sync=false` returns immediately with `transferId`.
-> 
+>
 > **Size Limits**: Configurable in Settings → MCP → SFTP.
+
+### HTTP Streaming Transfer
+
+For cross-machine scenarios (MCP client on device A, Tabby on device B, remote server C), files can be streamed directly via HTTP without temp files on B.
+
+**Upload** (A → B → C):
+```bash
+# Raw binary
+curl -X POST "http://<tabby-host>:3001/api/sftp/upload?remotePath=/tmp/file.txt&sessionId=xxx" \
+  --data-binary @/local/file.txt -H "Content-Type: application/octet-stream"
+
+# Multipart
+curl -X POST "http://<tabby-host>:3001/api/sftp/upload?remotePath=/tmp/file.txt&sessionId=xxx" \
+  -F "file=@/local/file.txt"
+```
+
+**Download** (C → B → A):
+```bash
+curl -o file.txt "http://<tabby-host>:3001/api/sftp/download?remotePath=/tmp/file.txt&sessionId=xxx"
+```
+
+> **Cross-machine hints**: When `sftp_upload` detects the local file doesn't exist (cross-machine), it returns ready-to-use curl commands. `sftp_download` responses include `httpDownloadUrl` and `httpDownloadCurl` fields.
+>
+> **Remote Call Address**: Configure in Settings → MCP to set the base URL used in these hints (auto-detects local IP).
 
 ---
 
@@ -308,6 +335,7 @@ For clients that don't support SSE, use the STDIO bridge:
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Port | MCP server port | 3001 |
+| Remote Call Address | URL for cross-machine access (auto-detects local IP) | `http://<local-ip>:3001` |
 | Start on Boot | Auto-start server | true |
 | Pair Programming | Confirm commands | true |
 | Session Tracking | Use stable UUIDs | true |

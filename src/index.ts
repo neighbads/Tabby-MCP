@@ -82,7 +82,11 @@ export default class McpModule {
         // Register SFTP tools if available (tabby-ssh installed)
         if (this.sftpTools.isAvailable()) {
             this.mcpService.registerToolCategory(this.sftpTools);
-            this.logger.info('SFTP tools registered');
+            this.sftpTools.registerHttpRoutes(
+                this.mcpService.getExpressApp(),
+                () => this.mcpService.getServerPort()
+            );
+            this.logger.info('SFTP tools and HTTP transfer routes registered');
         }
 
         // Initialize server after app is ready

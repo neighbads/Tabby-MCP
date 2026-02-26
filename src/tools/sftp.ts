@@ -8,6 +8,8 @@ import { McpTool, SFTPFileInfo } from '../types/types';
 import { TerminalToolCategory } from './terminal';
 import * as fs from 'fs';
 import * as path from 'path';
+import Busboy from 'busboy';
+import { Application, Request, Response } from 'express';
 
 // Try to import tabby-ssh (optional dependency)
 let SSHTabComponent: any;
@@ -87,6 +89,363 @@ export class SFTPToolCategory extends BaseToolCategory {
 
     public isAvailable(): boolean {
         return sftpAvailable;
+    }
+
+    // HTTP streaming support
+    private serverPortGetter: (() => number) | null = null;
+
+    /**
+     * Register HTTP streaming routes for cross-machine file transfer
+     */
+    public registerHttpRoutes(app: Application, getServerPort: () => number): void {
+        this.serverPortGetter = getServerPort;
+
+        app.post('/api/sftp/upload', (req: Request, res: Response) => {
+            this.handleHttpUpload(req, res).catch(err => {
+                this.logger.error('[HTTP Upload] Unhandled error:', err);
+                if (!res.headersSent) {
+                    res.status(500).json({ success: false, error: err.message || String(err) });
+                }
+            });
+        });
+
+        app.get('/api/sftp/download', (req: Request, res: Response) => {
+            this.handleHttpDownload(req, res).catch(err => {
+                this.logger.error('[HTTP Download] Unhandled error:', err);
+                if (!res.headersSent) {
+                    res.status(500).json({ success: false, error: err.message || String(err) });
+                }
+            });
+        });
+
+        this.logger.info('SFTP HTTP streaming routes registered: POST /api/sftp/upload, GET /api/sftp/download');
+    }
+
+    private getServerBaseUrl(): string {
+        // Use configured remote call URL if set, otherwise fall back to localhost
+        const remoteCallUrl = this.config.store.mcp?.remoteCallUrl;
+        if (remoteCallUrl) {
+            // Strip trailing slash if present
+            return remoteCallUrl.replace(/\/+$/, '');
+        }
+        const port = this.serverPortGetter ? this.serverPortGetter() : 3001;
+        return `http://localhost:${port}`;
+    }
+
+    /**
+     * HTTP upload handler: streams file from HTTP request directly to SFTP
+     * Supports multipart/form-data and application/octet-stream
+     */
+    private async handleHttpUpload(req: Request, res: Response): Promise<void> {
+        const remotePath = (req.query.remotePath as string) || (req.headers['x-remote-path'] as string);
+        if (!remotePath) {
+            res.status(400).json({ success: false, error: 'Missing required parameter: remotePath' });
+            return;
+        }
+
+        const locator = {
+            sessionId: (req.query.sessionId as string) || (req.headers['x-session-id'] as string),
+            tabIndex: req.query.tabIndex !== undefined ? parseInt(req.query.tabIndex as string, 10) : undefined,
+            title: (req.query.title as string) || (req.headers['x-title'] as string),
+        };
+
+        const session = this.findSSHSession(locator);
+        if (!session) {
+            res.status(404).json({ success: false, error: 'No SSH session found' });
+            return;
+        }
+
+        const maxSize = this.config.store.mcp?.sftp?.maxUploadSize || 10 * 1024 * 1024;
+        const contentLength = req.headers['content-length'] ? parseInt(req.headers['content-length'] as string, 10) : 0;
+        if (contentLength > maxSize) {
+            res.status(413).json({
+                success: false,
+                error: `Content-Length ${contentLength} exceeds max upload size ${maxSize}`,
+                hint: 'Increase max upload size in Settings → MCP → SFTP'
+            });
+            return;
+        }
+
+        const transferId = this.generateTransferId();
+        const fileName = (req.query.fileName as string) || (req.headers['x-file-name'] as string) || path.basename(remotePath);
+        const task: TransferTask = {
+            id: transferId,
+            type: 'upload',
+            localPath: '(HTTP upload)',
+            remotePath,
+            sessionId: session.sessionId,
+            connectionName: session.tab.title || 'SSH Connection',
+            status: 'pending',
+            progress: 0,
+            bytesTransferred: 0,
+            totalBytes: contentLength,
+            startTime: Date.now()
+        };
+        this.transferTasks.set(transferId, task);
+        this.emitTransferUpdate();
+        this.cleanupOldTransfers();
+
+        const startTime = Date.now();
+
+        try {
+            const sftpSession = await this.getSFTPSession(session.tab);
+            if (!sftpSession) {
+                task.status = 'failed';
+                task.error = 'Could not open SFTP session';
+                task.endTime = Date.now();
+                this.emitTransferUpdate();
+                res.status(500).json({ success: false, error: 'Could not open SFTP session' });
+                return;
+            }
+
+            task.status = 'running';
+            this.emitTransferUpdate();
+
+            const contentType = req.headers['content-type'] || '';
+
+            // Get file stream based on content type
+            let fileStream: NodeJS.ReadableStream;
+            let streamFileName = fileName;
+            let streamFileSize = contentLength;
+
+            if (contentType.includes('multipart/form-data')) {
+                // Parse multipart using busboy
+                const result = await new Promise<{ stream: NodeJS.ReadableStream; filename: string; }>((resolve, reject) => {
+                    const busboy = Busboy({ headers: req.headers });
+                    let resolved = false;
+
+                    busboy.on('file', (_fieldname: string, file: NodeJS.ReadableStream, info: { filename: string }) => {
+                        if (!resolved) {
+                            resolved = true;
+                            resolve({ stream: file, filename: info.filename || fileName });
+                        }
+                    });
+
+                    busboy.on('error', (err: Error) => {
+                        if (!resolved) {
+                            resolved = true;
+                            reject(err);
+                        }
+                    });
+
+                    busboy.on('finish', () => {
+                        if (!resolved) {
+                            resolved = true;
+                            reject(new Error('No file found in multipart upload'));
+                        }
+                    });
+
+                    req.pipe(busboy);
+                });
+
+                fileStream = result.stream;
+                streamFileName = result.filename;
+            } else {
+                // Treat request body as raw binary stream
+                fileStream = req;
+            }
+
+            const httpUpload = new HttpStreamUpload(
+                streamFileName,
+                streamFileSize,
+                fileStream,
+                (bytes: number) => {
+                    task.bytesTransferred = bytes;
+                    if (task.totalBytes > 0) {
+                        task.progress = Math.round((bytes / task.totalBytes) * 100);
+                    }
+                    task.speed = bytes / ((Date.now() - task.startTime) / 1000);
+                }
+            );
+
+            // Handle client disconnect (only on premature abort, not normal body completion)
+            task.cancelCallback = () => {
+                httpUpload.cancel();
+            };
+
+            req.on('close', () => {
+                // req.complete is true when the body was fully received (normal case)
+                // Only cancel if the client actually disconnected before sending all data
+                if (!req.complete && task.status === 'running') {
+                    this.logger.warn(`[HTTP Upload] Client disconnected during transfer ${transferId}`);
+                    httpUpload.cancel();
+                    task.status = 'cancelled';
+                    task.endTime = Date.now();
+                    this.emitTransferUpdate();
+                }
+            });
+
+            await sftpSession.upload(remotePath, httpUpload);
+
+            task.status = 'completed';
+            task.progress = 100;
+            task.bytesTransferred = httpUpload.getCompletedBytes();
+            task.endTime = Date.now();
+            this.emitTransferUpdate();
+
+            res.json({
+                success: true,
+                transferId,
+                remotePath,
+                bytesTransferred: httpUpload.getCompletedBytes(),
+                duration: Date.now() - startTime
+            });
+        } catch (error: any) {
+            task.status = 'failed';
+            task.error = error.message || String(error);
+            task.endTime = Date.now();
+            this.emitTransferUpdate();
+
+            if (!res.headersSent) {
+                res.status(500).json({
+                    success: false,
+                    transferId,
+                    error: error.message || String(error)
+                });
+            }
+        }
+    }
+
+    /**
+     * HTTP download handler: streams file from SFTP directly to HTTP response
+     */
+    private async handleHttpDownload(req: Request, res: Response): Promise<void> {
+        const remotePath = (req.query.remotePath as string) || (req.headers['x-remote-path'] as string);
+        if (!remotePath) {
+            res.status(400).json({ success: false, error: 'Missing required parameter: remotePath' });
+            return;
+        }
+
+        const locator = {
+            sessionId: (req.query.sessionId as string) || (req.headers['x-session-id'] as string),
+            tabIndex: req.query.tabIndex !== undefined ? parseInt(req.query.tabIndex as string, 10) : undefined,
+            title: (req.query.title as string) || (req.headers['x-title'] as string),
+        };
+
+        const session = this.findSSHSession(locator);
+        if (!session) {
+            res.status(404).json({ success: false, error: 'No SSH session found' });
+            return;
+        }
+
+        try {
+            const sftp = await this.getSFTPSession(session.tab);
+            if (!sftp) {
+                res.status(500).json({ success: false, error: 'Could not open SFTP session' });
+                return;
+            }
+
+            // Check remote file
+            let remoteStats: any;
+            try {
+                remoteStats = await sftp.stat(remotePath);
+            } catch (error: any) {
+                res.status(404).json({ success: false, error: `Remote file not found: ${remotePath}` });
+                return;
+            }
+
+            const maxSize = this.config.store.mcp?.sftp?.maxDownloadSize || 10 * 1024 * 1024;
+            if (remoteStats.size > maxSize) {
+                res.status(413).json({
+                    success: false,
+                    error: `File too large: ${remoteStats.size} bytes (max: ${maxSize})`,
+                    hint: 'Increase max download size in Settings → MCP → SFTP'
+                });
+                return;
+            }
+
+            const transferId = this.generateTransferId();
+            const fileName = path.basename(remotePath);
+            const task: TransferTask = {
+                id: transferId,
+                type: 'download',
+                localPath: '(HTTP download)',
+                remotePath,
+                sessionId: session.sessionId,
+                connectionName: session.tab.title || 'SSH Connection',
+                status: 'running',
+                progress: 0,
+                bytesTransferred: 0,
+                totalBytes: remoteStats.size,
+                startTime: Date.now()
+            };
+            this.transferTasks.set(transferId, task);
+            this.emitTransferUpdate();
+            this.cleanupOldTransfers();
+
+            // Set response headers
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+            if (remoteStats.size > 0) {
+                res.setHeader('Content-Length', remoteStats.size);
+            }
+            res.setHeader('X-Transfer-Id', transferId);
+
+            // Handle client disconnect
+            let clientDisconnected = false;
+            res.on('close', () => {
+                if (task.status === 'running') {
+                    clientDisconnected = true;
+                    this.logger.warn(`[HTTP Download] Client disconnected during transfer ${transferId}`);
+                    task.status = 'cancelled';
+                    task.endTime = Date.now();
+                    this.emitTransferUpdate();
+                }
+            });
+
+            // Open SFTP handle and stream chunks
+            const handle = await sftp.open(remotePath, 1); // OPEN_READ
+            let bytesWritten = 0;
+
+            try {
+                while (!clientDisconnected) {
+                    const chunk = await handle.read();
+                    if (!chunk || chunk.length === 0) break;
+
+                    bytesWritten += chunk.length;
+                    task.bytesTransferred = bytesWritten;
+                    if (task.totalBytes > 0) {
+                        task.progress = Math.round((bytesWritten / task.totalBytes) * 100);
+                    }
+                    task.speed = bytesWritten / ((Date.now() - task.startTime) / 1000);
+                    this.emitTransferUpdate();
+
+                    // Write with backpressure handling
+                    const canContinue = res.write(Buffer.from(chunk));
+                    if (!canContinue && !clientDisconnected) {
+                        await new Promise<void>(resolve => res.once('drain', resolve));
+                    }
+                }
+
+                await handle.close();
+
+                if (!clientDisconnected) {
+                    task.status = 'completed';
+                    task.progress = 100;
+                    task.bytesTransferred = bytesWritten;
+                    task.endTime = Date.now();
+                    this.emitTransferUpdate();
+                    res.end();
+                }
+            } catch (error: any) {
+                try { await handle.close(); } catch { }
+
+                task.status = 'failed';
+                task.error = error.message || String(error);
+                task.endTime = Date.now();
+                this.emitTransferUpdate();
+
+                if (!res.headersSent) {
+                    res.status(500).json({ success: false, error: error.message || String(error) });
+                } else if (!clientDisconnected) {
+                    res.end();
+                }
+            }
+        } catch (error: any) {
+            if (!res.headersSent) {
+                res.status(500).json({ success: false, error: error.message || String(error) });
+            }
+        }
     }
 
     private initializeTools(): void {
@@ -693,13 +1052,35 @@ Max upload size is configurable in Tabby Settings → MCP → SFTP.`,
                 }
                 this.logger.debug(`[sftp_upload] Using session: ${session.sessionId}`);
 
+                // If useHttpEndpoints is enabled, return curl command directly
+                if (this.config.store.mcp?.sftp?.useHttpEndpoints) {
+                    const baseUrl = this.getServerBaseUrl();
+                    const queryParams = new URLSearchParams({ remotePath: params.remotePath });
+                    if (session.sessionId) queryParams.set('sessionId', session.sessionId);
+                    const uploadUrl = `${baseUrl}/api/sftp/upload?${queryParams.toString()}`;
+
+                    return {
+                        content: [{
+                            type: 'text', text: JSON.stringify({
+                                success: true,
+                                useHttpEndpoints: true,
+                                httpUploadUrl: uploadUrl,
+                                httpUploadCurl: `curl -X POST "${uploadUrl}" --data-binary @${params.localPath} -H "Content-Type: application/octet-stream"`,
+                                httpUploadCurlMultipart: `curl -X POST "${uploadUrl}" -F "file=@${params.localPath}"`,
+                                message: 'HTTP endpoint mode enabled. Use the curl command to upload the file.'
+                            }, null, 2)
+                        }]
+                    };
+                }
+
                 // Check local file exists
                 if (!fs.existsSync(params.localPath)) {
                     this.logger.warn(`[sftp_upload] Local file not found: ${params.localPath}`);
                     return {
                         content: [{
                             type: 'text', text: JSON.stringify({
-                                success: false, error: `Local file not found: ${params.localPath}`
+                                success: false,
+                                error: `Local file not found: ${params.localPath}`
                             })
                         }]
                     };
@@ -872,6 +1253,26 @@ Max download size is configurable in Tabby Settings → MCP → SFTP.`,
                 }
                 this.logger.debug(`[sftp_download] Using session: ${session.sessionId}`);
 
+                // If useHttpEndpoints is enabled, return curl command directly
+                if (this.config.store.mcp?.sftp?.useHttpEndpoints) {
+                    const baseUrl = this.getServerBaseUrl();
+                    const dlParams = new URLSearchParams({ remotePath: params.remotePath });
+                    if (session.sessionId) dlParams.set('sessionId', session.sessionId);
+                    const httpDownloadUrl = `${baseUrl}/api/sftp/download?${dlParams.toString()}`;
+
+                    return {
+                        content: [{
+                            type: 'text', text: JSON.stringify({
+                                success: true,
+                                useHttpEndpoints: true,
+                                httpDownloadUrl,
+                                httpDownloadCurl: `curl -o "${path.basename(params.remotePath)}" "${httpDownloadUrl}"`,
+                                message: 'HTTP endpoint mode enabled. Use the curl command to download the file.'
+                            }, null, 2)
+                        }]
+                    };
+                }
+
                 try {
                     const sftp = await this.getSFTPSession(session.tab);
                     if (!sftp) {
@@ -998,28 +1399,24 @@ Max download size is configurable in Tabby Settings → MCP → SFTP.`,
                     if (sync) {
                         await doDownload();
                         return {
-                            content: [{
-                                type: 'text', text: JSON.stringify({
-                                    success: true,
-                                    transferId,
-                                    remotePath: params.remotePath,
-                                    localPath: params.localPath,
-                                    bytesTransferred: task.bytesTransferred,
-                                    duration: task.endTime! - task.startTime
-                                })
-                            }]
+                            content: [{ type: 'text', text: JSON.stringify({
+                                success: true,
+                                transferId,
+                                remotePath: params.remotePath,
+                                localPath: params.localPath,
+                                bytesTransferred: task.bytesTransferred,
+                                duration: task.endTime! - task.startTime
+                            }) }]
                         };
                     } else {
                         doDownload().catch(e => this.logger.error('Async download failed:', e));
                         return {
-                            content: [{
-                                type: 'text', text: JSON.stringify({
-                                    success: true,
-                                    async: true,
-                                    transferId,
-                                    message: 'Download started. Use sftp_get_transfer_status to check progress.'
-                                })
-                            }]
+                            content: [{ type: 'text', text: JSON.stringify({
+                                success: true,
+                                async: true,
+                                transferId,
+                                message: 'Download started. Use sftp_get_transfer_status to check progress.'
+                            }) }]
                         };
                     }
                 } catch (error: any) {
@@ -1302,6 +1699,137 @@ class StreamFileDownload {
                 // Ignore close errors
             }
             this.fd = null;
+        }
+    }
+}
+
+/**
+ * HTTP stream-based FileUpload adapter for SFTP upload
+ * Adapts an incoming HTTP request stream into the FileUpload interface
+ * expected by sftpSession.upload()
+ */
+class HttpStreamUpload {
+    private name: string;
+    private size: number;
+    private stream: NodeJS.ReadableStream;
+    private onProgress: (bytes: number) => void;
+    private cancelled = false;
+    private ended = false;
+    private position = 0;
+
+    // Chunk queue with backpressure
+    private chunkQueue: Uint8Array[] = [];
+    private queuedBytes = 0;
+    private readonly highWaterMark = 256 * 1024; // 256KB
+    private readonly lowWaterMark = 128 * 1024;  // 128KB
+    private waitingForData: ((value: void) => void) | null = null;
+    private streamPaused = false;
+
+    constructor(
+        name: string,
+        size: number,
+        stream: NodeJS.ReadableStream,
+        onProgress?: (bytes: number) => void
+    ) {
+        this.name = name;
+        this.size = size;
+        this.stream = stream;
+        this.onProgress = onProgress || (() => { });
+
+        this.stream.on('data', (chunk: Buffer) => {
+            this.chunkQueue.push(new Uint8Array(chunk));
+            this.queuedBytes += chunk.length;
+
+            // Resume waiting reader
+            if (this.waitingForData) {
+                const resolve = this.waitingForData;
+                this.waitingForData = null;
+                resolve();
+            }
+
+            // Apply backpressure
+            if (this.queuedBytes >= this.highWaterMark && !this.streamPaused) {
+                this.streamPaused = true;
+                if (typeof (this.stream as any).pause === 'function') {
+                    (this.stream as any).pause();
+                }
+            }
+        });
+
+        this.stream.on('end', () => {
+            this.ended = true;
+            if (this.waitingForData) {
+                const resolve = this.waitingForData;
+                this.waitingForData = null;
+                resolve();
+            }
+        });
+
+        this.stream.on('error', () => {
+            this.ended = true;
+            this.cancelled = true;
+            if (this.waitingForData) {
+                const resolve = this.waitingForData;
+                this.waitingForData = null;
+                resolve();
+            }
+        });
+    }
+
+    getName(): string { return this.name; }
+    getSize(): number { return this.size; }
+    getMode(): number { return 0o644; }
+    getCompletedBytes(): number { return this.position; }
+    isComplete(): boolean { return this.ended && this.chunkQueue.length === 0; }
+    isCancelled(): boolean { return this.cancelled; }
+
+    cancel(): void {
+        this.cancelled = true;
+        if (typeof (this.stream as any).destroy === 'function') {
+            (this.stream as any).destroy();
+        }
+    }
+
+    async read(): Promise<Uint8Array> {
+        if (this.cancelled) throw new Error('Transfer cancelled');
+
+        // If queue is empty and stream hasn't ended, wait for data
+        while (this.chunkQueue.length === 0 && !this.ended && !this.cancelled) {
+            await new Promise<void>(resolve => {
+                this.waitingForData = resolve;
+            });
+        }
+
+        if (this.cancelled) throw new Error('Transfer cancelled');
+
+        // Return empty array to signal completion
+        if (this.chunkQueue.length === 0 && this.ended) {
+            return new Uint8Array(0);
+        }
+
+        const chunk = this.chunkQueue.shift()!;
+        this.queuedBytes -= chunk.length;
+        this.position += chunk.length;
+        this.onProgress(this.position);
+
+        // Resume stream if below low water mark
+        if (this.streamPaused && this.queuedBytes < this.lowWaterMark) {
+            this.streamPaused = false;
+            if (typeof (this.stream as any).resume === 'function') {
+                (this.stream as any).resume();
+            }
+        }
+
+        return chunk;
+    }
+
+    close(): void {
+        if (typeof (this.stream as any).destroy === 'function') {
+            try {
+                (this.stream as any).destroy();
+            } catch {
+                // Ignore close errors
+            }
         }
     }
 }

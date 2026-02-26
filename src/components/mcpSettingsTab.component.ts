@@ -6,6 +6,7 @@ import { McpLoggerService } from '../services/mcpLogger.service';
 import { McpI18nService } from '../services/i18n.service';
 import { SFTPToolCategory } from '../tools/sftp';
 import { PLUGIN_VERSION } from '../version';
+import * as os from 'os';
 
 /**
  * MCP Settings Tab Component with i18n support
@@ -56,9 +57,16 @@ import { PLUGIN_VERSION } from '../version';
 
       <div class="form-group">
         <label>{{ t('mcp.config.port') }}</label>
-        <input type="number" class="form-control" [(ngModel)]="config.store.mcp.port" 
+        <input type="number" class="form-control" [(ngModel)]="config.store.mcp.port"
                placeholder="3001" min="1024" max="65535" (change)="saveConfig()">
         <small class="form-text text-muted">{{ t('mcp.config.port.desc') }}</small>
+      </div>
+
+      <div class="form-group">
+        <label>{{ t('mcp.config.remoteCallUrl') }}</label>
+        <input type="text" class="form-control" [(ngModel)]="config.store.mcp.remoteCallUrl"
+               [placeholder]="defaultRemoteCallUrl" (change)="saveConfig()">
+        <small class="form-text text-muted">{{ t('mcp.config.remoteCallUrl.desc') }}</small>
       </div>
 
       <div class="form-group">
@@ -250,6 +258,18 @@ import { PLUGIN_VERSION } from '../version';
         </div>
         <small class="form-text text-muted">
           {{ t('mcp.sftp.enable.desc') }}
+        </small>
+      </div>
+
+      <div class="form-group" *ngIf="config.store.mcp.sftp.enabled">
+        <div class="checkbox">
+          <label>
+            <input type="checkbox" [(ngModel)]="config.store.mcp.sftp.useHttpEndpoints" (change)="saveConfig()">
+            {{ t('mcp.sftp.useHttpEndpoints') }}
+          </label>
+        </div>
+        <small class="form-text text-muted">
+          {{ t('mcp.sftp.useHttpEndpoints.desc') }}
         </small>
       </div>
 
@@ -745,6 +765,7 @@ import { PLUGIN_VERSION } from '../version';
 export class McpSettingsTabComponent implements OnInit, OnDestroy {
   version = PLUGIN_VERSION;
   saveMessage = '';
+  defaultRemoteCallUrl = 'http://0.0.0.0:3001';
   private configSub?: Subscription;
 
   constructor(
@@ -756,6 +777,15 @@ export class McpSettingsTabComponent implements OnInit, OnDestroy {
   ) { }
 
   ngOnInit(): void {
+    // Auto-detect local IP for remote call URL default
+    const localIp = this.getLocalIp();
+    const port = this.config.store.mcp?.port || 3001;
+    this.defaultRemoteCallUrl = `http://${localIp}:${port}`;
+    if (!this.config.store.mcp.remoteCallUrl) {
+      this.config.store.mcp.remoteCallUrl = this.defaultRemoteCallUrl;
+      this.config.save();
+    }
+
     // Ensure timing config exists
     if (!this.config.store.mcp.timing) {
       this.config.store.mcp.timing = {
@@ -913,6 +943,25 @@ export class McpSettingsTabComponent implements OnInit, OnDestroy {
   }
 
   // ============== Config example ==============
+
+  /**
+   * Detect the first non-internal IPv4 address of this machine
+   */
+  private getLocalIp(): string {
+    try {
+      const interfaces = os.networkInterfaces();
+      for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]!) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            return iface.address;
+          }
+        }
+      }
+    } catch {
+      // Ignore errors
+    }
+    return '0.0.0.0';
+  }
 
   getConfigExample(): string {
     const port = this.config.store.mcp?.port || 3001;

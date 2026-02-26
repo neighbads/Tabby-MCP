@@ -71,6 +71,7 @@
         <li>列出/读取/写入远程文件</li>
         <li>创建/删除目录</li>
         <li>重命名/移动文件</li>
+        <li><b>HTTP 流式传输</b></li>
         <li><i>（需要 tabby-ssh）</i></li>
       </ul>
     </td>
@@ -186,6 +187,8 @@ npm run build
 |------|-----|----------|
 | Streamable HTTP | `http://localhost:3001/mcp` | 2025-03-26 (推荐) |
 | Legacy SSE | `http://localhost:3001/sse` | 2024-11-05 |
+| SFTP 上传 | `POST http://localhost:3001/api/sftp/upload` | HTTP 流式传输 |
+| SFTP 下载 | `GET http://localhost:3001/api/sftp/download` | HTTP 流式传输 |
 | 健康检查 | `http://localhost:3001/health` | - |
 | 服务器信息 | `http://localhost:3001/info` | - |
 
@@ -262,8 +265,32 @@ npm run build
 | `sftp_cancel_transfer` | 取消活跃传输 | `transferId` |
 
 > **传输模式**：`sync=true`（默认）等待完成。`sync=false` 立即返回 `transferId`。
-> 
+>
 > **大小限制**：可在设置 → MCP → SFTP 中配置。
+
+### HTTP 流式传输
+
+跨机器场景下（MCP 客户端在设备 A，Tabby 在设备 B，远程服务器 C），文件可通过 HTTP 直接流式传输，设备 B 上无需临时文件。
+
+**上传** (A → B → C)：
+```bash
+# 原始二进制
+curl -X POST "http://<tabby主机>:3001/api/sftp/upload?remotePath=/tmp/file.txt&sessionId=xxx" \
+  --data-binary @/local/file.txt -H "Content-Type: application/octet-stream"
+
+# Multipart 表单
+curl -X POST "http://<tabby主机>:3001/api/sftp/upload?remotePath=/tmp/file.txt&sessionId=xxx" \
+  -F "file=@/local/file.txt"
+```
+
+**下载** (C → B → A)：
+```bash
+curl -o file.txt "http://<tabby主机>:3001/api/sftp/download?remotePath=/tmp/file.txt&sessionId=xxx"
+```
+
+> **跨机器提示**：当 `sftp_upload` 检测到本地文件不存在（跨机器场景）时，会返回可直接使用的 curl 命令。`sftp_download` 的响应中包含 `httpDownloadUrl` 和 `httpDownloadCurl` 字段。
+>
+> **远程调用地址**：在设置 → MCP 中配置，用于生成上述提示中的 URL（自动检测本机 IP）。
 
 ---
 
@@ -272,6 +299,7 @@ npm run build
 | 设置 | 说明 | 默认值 |
 |------|------|--------|
 | 端口 | MCP 服务器端口 | 3001 |
+| 远程调用地址 | 跨机器访问时使用的 URL（自动检测本机 IP） | `http://<本机IP>:3001` |
 | 启动时运行 | 自动启动服务器 | true |
 | 结对编程模式 | 执行前确认 | true |
 | 会话跟踪 | 使用稳定 UUID | true |

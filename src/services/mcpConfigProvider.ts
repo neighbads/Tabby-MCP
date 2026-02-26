@@ -10,6 +10,7 @@ export class McpConfigProvider extends ConfigProvider {
         mcp: {
             port: 3001,
             host: 'http://localhost:3001',
+            remoteCallUrl: '',
             enableLogging: true,
             startOnBoot: true,
             logLevel: 'info',
@@ -42,7 +43,8 @@ export class McpConfigProvider extends ConfigProvider {
                 maxFileSize: 1024 * 1024,   // Max file size for read operations (1MB)
                 maxUploadSize: 10 * 1024 * 1024 * 1024,   // Default: 10GB
                 maxDownloadSize: 10 * 1024 * 1024 * 1024, // Default: 10GB
-                timeout: 60000              // SFTP operation timeout in ms
+                timeout: 60000,             // SFTP operation timeout in ms
+                useHttpEndpoints: false     // Return curl commands instead of local file operations
             }
         }
     };

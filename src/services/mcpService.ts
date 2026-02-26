@@ -549,6 +549,20 @@ export class McpService {
     }
 
     /**
+     * Get the Express application instance for registering additional routes
+     */
+    public getExpressApp(): express.Application {
+        return this.app;
+    }
+
+    /**
+     * Get the configured server port
+     */
+    public getServerPort(): number {
+        return this.config.store.mcp?.port || 3001;
+    }
+
+    /**
      * Check if server is running
      */
     public isServerRunning(): boolean {
