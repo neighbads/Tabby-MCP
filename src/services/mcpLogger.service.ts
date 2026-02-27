@@ -117,6 +117,6 @@ export class McpLoggerService {
      * Export logs as JSON string
      */
     exportLogs(): string {
-        return JSON.stringify(this.logs, null, 2);
+        return this.logs.map(log => JSON.stringify(log)).join('\n');
     }
 }

@@ -21,6 +21,7 @@ import { DialogService } from './services/dialog.service';
 // Tools
 import { TerminalToolCategory } from './tools/terminal';
 import { TabManagementToolCategory } from './tools/tabManagement';
+import { ProfileManagementToolCategory } from './tools/profileManagement';
 import { SFTPToolCategory } from './tools/sftp';
 
 // Settings
@@ -53,6 +54,7 @@ import './styles.scss';
         DialogService,
         TerminalToolCategory,
         TabManagementToolCategory,
+        ProfileManagementToolCategory,
         SFTPToolCategory,
         { provide: SettingsTabProvider, useClass: McpSettingsTabProvider, multi: true },
         { provide: ConfigProvider, useClass: McpConfigProvider, multi: true }
@@ -71,6 +73,7 @@ export default class McpModule {
         private logger: McpLoggerService,
         private terminalTools: TerminalToolCategory,
         private tabManagementTools: TabManagementToolCategory,
+        private profileManagementTools: ProfileManagementToolCategory,
         private sftpTools: SFTPToolCategory
     ) {
         this.logger.info('MCP Module loading...');
@@ -78,6 +81,7 @@ export default class McpModule {
         // Register all tool categories with MCP service
         this.mcpService.registerToolCategory(this.terminalTools);
         this.mcpService.registerToolCategory(this.tabManagementTools);
+        this.mcpService.registerToolCategory(this.profileManagementTools);
 
         // Register SFTP tools if available (tabby-ssh installed)
         if (this.sftpTools.isAvailable()) {

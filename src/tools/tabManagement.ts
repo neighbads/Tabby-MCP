@@ -1,14 +1,13 @@
-import { Injectable, Inject, forwardRef } from '@angular/core';
-import { AppService, BaseTabComponent, ConfigService, SplitTabComponent, ProfilesService } from 'tabby-core';
+import { Injectable } from '@angular/core';
+import { AppService, BaseTabComponent, SplitTabComponent } from 'tabby-core';
 import { BaseTerminalTabComponent } from 'tabby-terminal';
 import { z } from 'zod';
 import { BaseToolCategory } from './base-tool-category';
 import { McpLoggerService } from '../services/mcpLogger.service';
 import { McpTool } from '../types/types';
-import { TerminalToolCategory } from './terminal';
 
 /**
- * Tab Management Tools Category - Comprehensive tab and profile management
+ * Tab Management Tools Category - Tab lifecycle and navigation
  */
 @Injectable({ providedIn: 'root' })
 export class TabManagementToolCategory extends BaseToolCategory {
@@ -17,9 +16,6 @@ export class TabManagementToolCategory extends BaseToolCategory {
     constructor(
         private app: AppService,
         logger: McpLoggerService,
-        private config: ConfigService,
-        private profilesService: ProfilesService,
-        @Inject(forwardRef(() => TerminalToolCategory)) private terminalTools: TerminalToolCategory
     ) {
         super(logger);
         this.initializeTools();
@@ -37,12 +33,6 @@ export class TabManagementToolCategory extends BaseToolCategory {
         this.registerTool(this.createMoveTabLeftTool());
         this.registerTool(this.createMoveTabRightTool());
         this.registerTool(this.createReopenLastTabTool());
-
-        // Profile/Session operations
-        this.registerTool(this.createListProfilesTool());
-        this.registerTool(this.createOpenProfileTool());
-        this.registerTool(this.createShowProfileSelectorTool());
-        this.registerTool(this.createQuickConnectTool());
 
         // Split pane operations
         this.registerTool(this.createSplitTabTool());
@@ -269,19 +259,25 @@ Tab targeting: tabId (stable, recommended) > tabIndex (legacy) > title (partial 
             description: 'Close all open tabs',
             schema: z.object({}),
             handler: async () => {
-                const count = this.app.tabs.length;
-                const success = await this.app.closeAllTabs();
+                // Close tabs one by one so each is pushed onto the reopen stack
+                // (app.closeAllTabs() bypasses the reopen stack)
+                const tabs = [...this.app.tabs];
+                const count = tabs.length;
+                let closed = 0;
 
-                if (success) {
-                    this.logger.info(`Closed all ${count} tabs`);
-                    return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: true, message: `Closed ${count} tabs` }) }]
-                    };
-                } else {
-                    return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: 'Some tabs blocked closure' }) }]
-                    };
+                for (const tab of tabs) {
+                    try {
+                        await this.app.closeTab(tab, false);
+                        closed++;
+                    } catch {
+                        // tab may already be destroyed
+                    }
                 }
+
+                this.logger.info(`Closed all ${closed}/${count} tabs`);
+                return {
+                    content: [{ type: 'text', text: JSON.stringify({ success: true, message: `Closed ${closed} tabs` }) }]
+                };
             }
         };
     }
@@ -416,420 +412,6 @@ Tab targeting: tabId (stable, recommended) > tabIndex (legacy) > title (partial 
                 } else {
                     return {
                         content: [{ type: 'text', text: JSON.stringify({ success: false, error: 'No tab to reopen' }) }]
-                    };
-                }
-            }
-        };
-    }
-
-    // ============= Profile/Session Operations =============
-
-    private createListProfilesTool(): McpTool {
-        return {
-            name: 'list_profiles',
-            description: `List all available terminal profiles (local shell, SSH connections, etc.).
-Returns profileId which can be used directly with open_profile().
-
-Workflow: list_profiles() -> find desired profile -> open_profile(profileId="...")`,
-            schema: z.object({}),
-            handler: async () => {
-                try {
-                    const profiles = await this.profilesService.getProfiles();
-                    // Use 'profileId' to match open_profile parameter name
-                    const formatted = profiles.map(p => ({
-                        profileId: p.id,  // Field name matches open_profile's parameter
-                        name: p.name,
-                        type: p.type,
-                        group: p.group,
-                        icon: p.icon,
-                        color: p.color
-                    }));
-
-                    this.logger.info(`Listed ${profiles.length} profiles`);
-                    return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: true, profiles: formatted, count: profiles.length }, null, 2) }]
-                    };
-                } catch (error: any) {
-                    this.logger.error('Error listing profiles:', error);
-                    return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: error.message }) }]
-                    };
-                }
-            }
-        };
-    }
-
-    private createOpenProfileTool(): McpTool {
-        return {
-            name: 'open_profile',
-            description: `Open a NEW terminal tab using a profile. Creates new connection.
-
-Usage: list_profiles() -> open_profile(profileId="...from list_profiles result")
-
-Parameters:
-- profileId: Use 'profileId' field from list_profiles (recommended)
-- profileName: Or match by name (partial, case-insensitive)
-- waitForReady: Wait for terminal/SSH to fully connect (default: true)
-- timeout: Timeout in ms when waiting (default: 30000)
-
-Returns sessionId for immediate use with exec_command, SFTP tools, etc.
-
-Response state fields:
-- tabReady: Tab/frontend initialized
-- sshConnected: SSH connection established (SSH profiles only)
-- ready: OVERALL ready state (for SSH: tabReady AND sshConnected)
-
-For SSH profiles, waits until sshSession.open=true (real connection established).
-
-NOTE: This opens a NEW tab. For existing connections, use get_session_list + exec_command.`,
-            schema: z.object({
-                profileId: z.string().optional().describe('profileId from list_profiles result'),
-                profileName: z.string().optional().describe('Profile name (partial match, case-insensitive)'),
-                waitForReady: z.boolean().optional().describe('Wait for connection (default: true for SSH, false for local)'),
-                timeout: z.number().optional().describe('Timeout in ms when waiting (default: 30000)')
-            }),
-            handler: async (params: { profileId?: string; profileName?: string; waitForReady?: boolean; timeout?: number }) => {
-                // Debug: log received params to diagnose parameter passing issues
-                this.logger.info(`[open_profile] Received params: ${JSON.stringify(params)}`);
-
-                // Handle both direct params and potential nested structure
-                const profileId = params?.profileId;
-                const profileName = params?.profileName;
-                const timeout = params?.timeout ?? 30000;
-
-                this.logger.debug(`[open_profile] Parsed: profileId=${profileId}, profileName=${profileName}`);
-
-                if (!profileId && !profileName) {
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: 'Either profileId or profileName must be provided',
-                                receivedParams: Object.keys(params || {}),
-                                hint: 'Use list_profiles to get available profile IDs and names'
-                            })
-                        }]
-                    };
-                }
-
-                try {
-                    const profiles = await this.profilesService.getProfiles();
-                    let profile = profiles.find(p =>
-                        (profileId && p.id === profileId) ||
-                        (profileName && p.name.toLowerCase().includes(profileName.toLowerCase()))
-                    );
-
-                    if (!profile) {
-                        this.logger.warn(`[open_profile] Profile not found: ${profileId || profileName}`);
-                        return {
-                            content: [{
-                                type: 'text', text: JSON.stringify({
-                                    success: false,
-                                    error: `Profile not found: ${profileId || profileName}`,
-                                    availableProfiles: profiles.map(p => ({ id: p.id, name: p.name }))
-                                })
-                            }]
-                        };
-                    }
-
-                    this.logger.info(`[open_profile] Opening profile: ${profile.name} (type: ${profile.type})`);
-                    const tab = await this.profilesService.openNewTabForProfile(profile);
-
-                    if (tab) {
-                        const tabId = this.getOrCreateTabId(tab);
-                        const tabIndex = this.app.tabs.indexOf(tab);
-                        const isSSH = profile.type === 'ssh' || profile.type?.includes('ssh');
-
-                        // Determine default waitForReady based on profile type
-                        const waitForReady = params?.waitForReady ?? isSSH;
-
-                        // Get sessionId from TerminalToolCategory's registry
-                        // CRITICAL: Call getOrCreateSessionId DIRECTLY on the tab object
-                        // DO NOT use findTerminalSessions() as the tab may not yet be in app.tabs
-                        let sessionId: string | undefined;
-                        if (tab instanceof BaseTerminalTabComponent) {
-                            // Direct call to getOrCreateSessionId ensures the same ID is registered
-                            sessionId = this.terminalTools.getOrCreateSessionId(tab);
-                            this.logger.debug(`[open_profile] SessionId assigned: ${sessionId}`);
-                        }
-                        // Fallback: generate UUID if not a terminal tab (shouldn't happen)
-                        if (!sessionId) {
-                            sessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-                                const r = Math.random() * 16 | 0;
-                                const v = c === 'x' ? r : (r & 0x3 | 0x8);
-                                return v.toString(16);
-                            });
-                            this.logger.warn(`[open_profile] Tab is not BaseTerminalTabComponent, generated fallback sessionId: ${sessionId}`);
-                        }
-
-                        if (waitForReady) {
-                            // Wait for the terminal session to be fully connected
-                            const timing = this.config.store.mcp?.timing || {};
-                            const sessionPollInterval = timing.sessionPollInterval ?? 200;
-                            const sessionStableChecks = timing.sessionStableChecks ?? 5;
-
-                            const startTime = Date.now();
-                            let tabReady = false;
-                            let sshConnected = false;
-                            let lastBufferLength = 0;
-                            let stableCount = 0;
-
-                            this.logger.debug(`[open_profile] Waiting for ready (isSSH=${isSSH}, timeout=${timeout}ms)`);
-
-                            while (Date.now() - startTime < timeout) {
-                                const tabAny = tab as any;
-
-                                // Check 1: Tab/Terminal Ready indicators
-                                const frontendReady = tabAny.frontend !== undefined;
-                                const sessionReady = tabAny.sessionReady === true;
-                                const hasSession = tabAny.session !== undefined;
-                                const sessionOpen = tabAny.session?.open === true;
-
-                                // Check 2: SSH-specific indicators (only for SSH profiles)
-                                if (isSSH) {
-                                    const sshSession = tabAny.sshSession;
-                                    if (sshSession && sshSession.open === true) {
-                                        sshConnected = true;
-                                        tabReady = true;
-                                        this.logger.info(`[open_profile] SSH session connected: ${profile.name}`);
-                                        break;
-                                    }
-                                } else {
-                                    // For non-SSH, consider ready when session is open
-                                    if (sessionOpen || (frontendReady && sessionReady)) {
-                                        tabReady = true;
-                                        break;
-                                    }
-                                }
-
-                                // Check 3: Buffer stability (fallback indicator)
-                                // NOTE: For SSH, buffer stability alone is NOT sufficient!
-                                // SSH may show connection prompts before actually authenticating.
-                                let bufferLength = 0;
-                                try {
-                                    const xterm = tabAny.frontend?.xterm;
-                                    if (xterm?.buffer?.active) {
-                                        bufferLength = xterm.buffer.active.length;
-                                    }
-                                } catch (e) {
-                                    // Ignore buffer access errors
-                                }
-
-                                // For SSH: Only use buffer stability as exit AFTER sshConnected
-                                // For non-SSH: Buffer stability can be used as ready indicator
-                                if (!isSSH) {
-                                    // Non-SSH: Buffer stability = ready
-                                    if (bufferLength > 0 && bufferLength === lastBufferLength) {
-                                        stableCount++;
-                                        if (stableCount >= sessionStableChecks) {
-                                            tabReady = true;
-                                            break;
-                                        }
-                                    } else {
-                                        stableCount = 0;
-                                        lastBufferLength = bufferLength;
-                                    }
-                                } else {
-                                    // SSH: Keep checking sshSession.open in the loop above
-                                    // Buffer stability alone should NOT trigger exit for SSH
-                                    // Just track the buffer for debugging
-                                    if (bufferLength !== lastBufferLength) {
-                                        lastBufferLength = bufferLength;
-                                        this.logger.debug(`[open_profile] SSH buffer activity: ${bufferLength} chars`);
-                                    }
-                                }
-
-                                await new Promise(resolve => setTimeout(resolve, sessionPollInterval));
-                            }
-
-                            const elapsed = Date.now() - startTime;
-
-                            // Determine final ready state:
-                            // - For SSH: ready = tabReady AND sshConnected
-                            // - For non-SSH: ready = tabReady
-                            const ready = isSSH ? (tabReady && sshConnected) : tabReady;
-
-                            this.logger.info(`[open_profile] Profile opened: ${profile.name} (tabReady=${tabReady}, sshConnected=${sshConnected}, ready=${ready}, elapsed=${elapsed}ms)`);
-
-                            return {
-                                content: [{
-                                    type: 'text', text: JSON.stringify({
-                                        success: true,
-                                        sessionId,
-                                        tabId,
-                                        tabIndex,
-                                        tabTitle: tab.title,
-                                        profileName: profile.name,
-                                        profileType: profile.type,
-                                        // State fields with clear semantics:
-                                        tabReady,           // Tab/frontend initialized
-                                        sshConnected: isSSH ? sshConnected : undefined,  // SSH connection established (SSH only)
-                                        ready,              // OVERALL ready state: can start using this session
-                                        elapsed: `${elapsed}ms`,
-                                        message: ready
-                                            ? `Profile ready: ${profile.name}`
-                                            : tabReady && !sshConnected
-                                                ? `Tab opened but SSH not connected: ${profile.name}`
-                                                : `Profile opened but not fully ready: ${profile.name}`,
-                                        hint: ready
-                                            ? 'Use sessionId with exec_command, SFTP tools, etc.'
-                                            : 'Session may not be fully connected. Check sshConnected status.'
-                                    })
-                                }]
-                            };
-                        }
-
-                        // No waiting - return immediately
-                        this.logger.info(`[open_profile] Profile opened (no wait): ${profile.name}`);
-                        return {
-                            content: [{
-                                type: 'text', text: JSON.stringify({
-                                    success: true,
-                                    sessionId,
-                                    tabId,
-                                    tabIndex,
-                                    tabTitle: tab.title,
-                                    profileName: profile.name,
-                                    profileType: profile.type,
-                                    // State fields (unknown since we didn't wait)
-                                    tabReady: undefined,    // Unknown - didn't wait
-                                    sshConnected: undefined, // Unknown - didn't wait
-                                    ready: false,           // Not verified as ready
-                                    message: `Opened profile: ${profile.name}`,
-                                    note: 'Profile opened without waiting. Use get_session_list to check status.',
-                                    hint: 'Use sessionId with exec_command, SFTP tools, etc.'
-                                })
-                            }]
-                        };
-                    } else {
-                        this.logger.error(`[open_profile] Failed to open profile: ${profile.name}`);
-                        return {
-                            content: [{ type: 'text', text: JSON.stringify({ success: false, error: 'Failed to open profile' }) }]
-                        };
-                    }
-                } catch (error: any) {
-                    this.logger.error('[open_profile] Error:', error);
-                    return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: error.message }) }]
-                    };
-                }
-            }
-        };
-    }
-
-    private createShowProfileSelectorTool(): McpTool {
-        return {
-            name: 'show_profile_selector',
-            description: `Show the profile selector dialog for the user to choose a profile.
-This is a NON-BLOCKING operation - it immediately returns after opening the dialog.
-The dialog will be shown to the user, but this tool does not wait for user selection.
-Use list_profiles + open_profile for programmatic profile opening instead.`,
-            schema: z.object({}),
-            handler: async () => {
-                try {
-                    // Fire-and-forget: show the dialog but don't wait for result
-                    // This prevents MCP from blocking indefinitely
-                    this.profilesService.showProfileSelector().then(profile => {
-                        if (profile) {
-                            this.logger.info(`User selected profile via dialog: ${profile.name}`);
-                        } else {
-                            this.logger.info('User cancelled profile selector dialog');
-                        }
-                    }).catch(err => {
-                        this.logger.warn('Profile selector dialog closed:', err?.message || 'unknown');
-                    });
-
-                    // Return immediately - don't wait for user action
-                    this.logger.info('Profile selector dialog opened (non-blocking)');
-                    return {
-                        content: [{
-                            type: 'text', text: JSON.stringify({
-                                success: true,
-                                message: 'Profile selector dialog opened',
-                                note: 'This is non-blocking. Use list_profiles + open_profile for programmatic control.',
-                                hint: 'The user can now select a profile from the dialog'
-                            })
-                        }]
-                    };
-                } catch (error: any) {
-                    const errorMessage = error?.message || (typeof error === 'string' ? error : 'Unknown error showing profile selector');
-                    this.logger.error('Error showing profile selector:', error);
-                    return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: errorMessage }) }]
-                    };
-                }
-            }
-        };
-    }
-
-    private createQuickConnectTool(): McpTool {
-        return {
-            name: 'quick_connect',
-            description: `Quick SSH connection - creates a NEW tab with temporary profile.
-
-IMPORTANT: This creates a NEW connection and tab, does NOT reuse existing sessions.
-- For new connections: Use this or open_profile
-- For existing sessions: Use get_session_list to find sessions, then exec_command
-
-Example: quick_connect(query="root@192.168.1.1") or quick_connect(query="user@host:2222")`,
-            schema: z.object({
-                query: z.string().describe('SSH string: "user@host" or "user@host:port"')
-            }),
-            handler: async (params: { query: string }) => {
-                // Debug: log received params
-                this.logger.debug(`quick_connect received params: ${JSON.stringify(params)}`);
-
-                // Safely extract query with validation
-                const query = params?.query;
-
-                // Validate query parameter
-                if (!query || typeof query !== 'string') {
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: 'Connection query string is required',
-                                hint: 'Provide a connection string like "user@host" or "user@host:port"',
-                                receivedParams: Object.keys(params || {})
-                            })
-                        }]
-                    };
-                }
-
-                // Validate query format (basic check)
-                if (!query.includes('@')) {
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: 'Invalid connection string format',
-                                hint: 'Use format "user@host" or "user@host:port"',
-                                received: query
-                            })
-                        }]
-                    };
-                }
-
-                try {
-                    const profile = await this.profilesService.quickConnect(query);
-
-                    if (profile) {
-                        this.logger.info(`Quick connect to: ${query}`);
-                        return {
-                            content: [{ type: 'text', text: JSON.stringify({ success: true, message: `Connected to: ${query}`, profile: profile.name }) }]
-                        };
-                    } else {
-                        return {
-                            content: [{ type: 'text', text: JSON.stringify({ success: false, error: 'Quick connect failed - no profile returned' }) }]
-                        };
-                    }
-                } catch (error: any) {
-                    this.logger.error('Error with quick connect:', error);
-                    return {
-                        content: [{ type: 'text', text: JSON.stringify({ success: false, error: error.message || 'Unknown error during quick connect' }) }]
                     };
                 }
             }

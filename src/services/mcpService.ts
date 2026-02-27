@@ -4,6 +4,7 @@ import express, { Request, Response } from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { IncomingMessage, ServerResponse } from 'http';
 import * as http from 'http';
@@ -22,7 +23,6 @@ import { PLUGIN_VERSION } from '../version';
  */
 @Injectable({ providedIn: 'root' })
 export class McpService {
-    private server!: McpServer;
     private legacyTransports: { [sessionId: string]: SSEServerTransport } = {};
     private streamableTransports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
     private app!: express.Application;
@@ -30,27 +30,41 @@ export class McpService {
     private sockets = new Set<Socket>();
     private isRunning = false;
     private toolCategories: ToolCategory[] = [];
+    private standaloneTools: McpTool[] = [];
 
     constructor(
         public config: ConfigService,
         private logger: McpLoggerService
     ) {
-        this.initializeServer();
+        this.configureExpress();
+        this.logger.info('MCP Server initialized (Streamable HTTP + Legacy SSE)');
     }
 
     /**
-     * Initialize the MCP server
+     * Create a new McpServer instance with all registered tools.
+     * Each connection gets its own server instance per MCP SDK requirements.
      */
-    private initializeServer(): void {
-        // Initialize MCP Server
-        this.server = new McpServer({
+    private createServer(): McpServer {
+        const server = new McpServer({
             name: 'Tabby MCP',
             version: PLUGIN_VERSION
         });
 
-        // Configure Express
-        this.configureExpress();
-        this.logger.info('MCP Server initialized (Streamable HTTP + Legacy SSE)');
+        for (const category of this.toolCategories) {
+            for (const tool of category.mcpTools) {
+                const rawShape = tool.schema && typeof tool.schema === 'object' && 'shape' in tool.schema
+                    ? (tool.schema as any).shape : tool.schema;
+                (server.tool as any)(tool.name, tool.description, rawShape, tool.handler);
+            }
+        }
+
+        for (const tool of this.standaloneTools) {
+            const rawShape = tool.schema && typeof tool.schema === 'object' && 'shape' in tool.schema
+                ? (tool.schema as any).shape : tool.schema;
+            (server.tool as any)(tool.name, tool.description, rawShape, tool.handler);
+        }
+
+        return server;
     }
 
     /**
@@ -60,21 +74,19 @@ export class McpService {
         this.toolCategories.push(category);
 
         category.mcpTools.forEach(tool => {
-            // Extract the raw shape from z.object() for MCP SDK compatibility
-            // MCP SDK expects { key: z.string() } format, not z.object({...})
-            const rawShape = tool.schema && typeof tool.schema === 'object' && 'shape' in tool.schema
-                ? (tool.schema as any).shape
-                : tool.schema;
-
-            this.logger.debug(`Registering tool: ${tool.name} with schema keys: ${Object.keys(rawShape || {}).join(', ')}`);
-
-            (this.server.tool as any)(
-                tool.name,
-                tool.description,
-                rawShape,
-                tool.handler
-            );
             this.logger.info(`Registered tool: ${tool.name}`);
+
+            // Register HTTP API endpoint for direct tool access
+            this.app.post(`/api/tool/${tool.name}`, async (req: Request, res: Response) => {
+                try {
+                    this.logger.info(`API call: ${tool.name}`, req.body);
+                    const result = await tool.handler(req.body, {});
+                    res.json(result);
+                } catch (error: any) {
+                    this.logger.error(`Tool ${tool.name} error:`, error);
+                    res.status(500).json({ error: error.message });
+                }
+            });
         });
     }
 
@@ -82,17 +94,7 @@ export class McpService {
      * Register a single tool
      */
     public registerTool(tool: McpTool): void {
-        // Extract the raw shape from z.object() for MCP SDK compatibility
-        const rawShape = tool.schema && typeof tool.schema === 'object' && 'shape' in tool.schema
-            ? (tool.schema as any).shape
-            : tool.schema;
-
-        (this.server.tool as any)(
-            tool.name,
-            tool.description,
-            rawShape,
-            tool.handler
-        );
+        this.standaloneTools.push(tool);
         this.logger.info(`Registered tool: ${tool.name}`);
     }
 
@@ -161,127 +163,76 @@ export class McpService {
                 return;
             }
 
-            // Handle GET request - establish SSE stream for server-to-client messages
-            if (req.method === 'GET') {
-                this.logger.info('Streamable HTTP: GET /mcp - Establishing SSE stream');
-
-                // Check for existing session
+            try {
+                // Check for existing session ID
                 const sessionId = req.headers['mcp-session-id'] as string;
+                let transport: StreamableHTTPServerTransport | undefined;
+
                 if (sessionId && this.streamableTransports[sessionId]) {
                     // Reuse existing transport
-                    const transport = this.streamableTransports[sessionId];
-                    res.setHeader('Content-Type', 'text/event-stream');
-                    res.setHeader('Cache-Control', 'no-cache');
-                    res.setHeader('Connection', 'keep-alive');
-                    res.setHeader('mcp-session-id', sessionId);
-
-                    // Keep connection alive
-                    const heartbeat = setInterval(() => {
-                        if (!res.writableEnded) {
-                            res.write(': heartbeat\n\n');
+                    transport = this.streamableTransports[sessionId];
+                } else if (!sessionId && req.method === 'POST' && isInitializeRequest(req.body)) {
+                    // New initialization request — create new transport + server
+                    transport = new StreamableHTTPServerTransport({
+                        sessionIdGenerator: () => randomUUID(),
+                        onsessioninitialized: (sid) => {
+                            this.logger.info(`Streamable HTTP: Session initialized: ${sid}`);
+                            // Store transport only after session is initialized
+                            this.streamableTransports[sid] = transport!;
+                            this.initSessionMetadata(sid, 'streamable', req);
                         }
-                    }, 15000);
+                    });
 
-                    res.on('close', () => {
-                        clearInterval(heartbeat);
-                        this.logger.info(`Streamable HTTP: SSE stream closed for session: ${sessionId}`);
-                        // Note: Don't delete transport here - it may still be used for POST requests
-                        // The transport.onclose handler will clean up when fully disconnected
+                    transport.onclose = () => {
+                        const sid = transport!.sessionId;
+                        if (sid && this.streamableTransports[sid]) {
+                            this.logger.info(`Streamable HTTP: Transport closed (onclose): ${sid}`);
+                            delete this.streamableTransports[sid];
+                            this.sessionMetadata.delete(sid);
+                        }
+                    };
+
+                    const server = this.createServer();
+                    await server.connect(transport);
+
+                    this.logger.info('Streamable HTTP: New session created');
+                } else {
+                    // Invalid request — no session ID and not an initialization request
+                    res.status(400).json({
+                        jsonrpc: '2.0',
+                        error: {
+                            code: -32000,
+                            message: 'Bad Request: No valid session ID provided'
+                        },
+                        id: null
                     });
                     return;
                 }
 
-                // No session - return info about how to connect
-                res.status(400).json({
-                    error: 'Session required',
-                    message: 'Send a POST request with initialize message first to establish session'
-                });
-                return;
-            }
-
-            // Handle DELETE request - close session
-            if (req.method === 'DELETE') {
-                const sessionId = req.headers['mcp-session-id'] as string;
-                if (sessionId && this.streamableTransports[sessionId]) {
-                    try {
-                        await this.streamableTransports[sessionId].close();
-                    } catch (e) {
-                        // Ignore close errors
-                    }
-                    delete this.streamableTransports[sessionId];
-                    this.logger.info(`Streamable HTTP: Session closed: ${sessionId}`);
-                    res.status(200).json({ message: 'Session closed' });
-                } else {
-                    res.status(404).json({ error: 'Session not found' });
-                }
-                return;
-            }
-
-            // Handle POST request - main message handling
-            if (req.method === 'POST') {
-                const sessionId = req.headers['mcp-session-id'] as string || randomUUID();
-                const acceptHeader = req.headers.accept || '';
-
-                this.logger.debug(`Streamable HTTP: POST /mcp sessionId=${sessionId}`);
-
-                // Check if we need to create new transport
-                let transport = this.streamableTransports[sessionId];
-                if (!transport) {
-                    // Create new Streamable HTTP transport
-                    transport = new StreamableHTTPServerTransport({
-                        sessionIdGenerator: () => sessionId,
-                        onsessioninitialized: (sid) => {
-                            this.logger.info(`Streamable HTTP: Session initialized: ${sid}`);
+                // Track activity for POST requests
+                if (req.method === 'POST' && req.body?.method) {
+                    const sid = sessionId || transport.sessionId;
+                    if (sid) {
+                        let activity = req.body.method;
+                        if (activity === 'tools/call' && req.body.params?.name) {
+                            activity += `: ${req.body.params.name}`;
                         }
+                        this.trackActivity(sid, activity);
+                    }
+                }
+
+                // Delegate all methods (GET, POST, DELETE) to the transport
+                await transport.handleRequest(req, res, req.body);
+            } catch (error: any) {
+                this.logger.error('Streamable HTTP: Error handling request:', error);
+                if (!res.headersSent) {
+                    res.status(500).json({
+                        jsonrpc: '2.0',
+                        error: { code: -32603, message: error.message || 'Internal error' },
+                        id: req.body?.id || null
                     });
-
-                    // Register close handler to clean up when connection is closed
-                    transport.onclose = () => {
-                        this.logger.info(`Streamable HTTP: Transport closed (onclose): ${sessionId}`);
-                        delete this.streamableTransports[sessionId];
-                        this.sessionMetadata.delete(sessionId);
-                    };
-
-                    this.streamableTransports[sessionId] = transport;
-                    this.initSessionMetadata(sessionId, 'streamable', req);
-
-                    // Connect to MCP server
-                    await this.server.connect(transport);
-
-                    this.logger.info(`Streamable HTTP: New session created: ${sessionId}`);
                 }
-
-                // Set session ID header in response
-                res.setHeader('mcp-session-id', sessionId);
-
-                // Track activity
-                if (req.body?.method) {
-                    let activity = req.body.method;
-                    if (activity === 'tools/call' && req.body.params?.name) {
-                        activity += `: ${req.body.params.name}`;
-                    }
-                    this.trackActivity(sessionId, activity);
-                }
-
-                // Handle the message
-                try {
-                    await transport.handleRequest(req, res, req.body);
-                } catch (error: any) {
-                    this.logger.error('Streamable HTTP: Error handling request:', error);
-                    if (!res.headersSent) {
-                        res.status(500).json({
-                            jsonrpc: '2.0',
-                            error: { code: -32603, message: error.message || 'Internal error' },
-                            id: req.body?.id || null
-                        });
-                    }
-                }
-                return;
             }
-
-            // Method not allowed
-            res.setHeader('Allow', 'GET, POST, DELETE');
-            res.status(405).json({ error: 'Method not allowed' });
         });
 
         // ============================================================
@@ -322,21 +273,27 @@ export class McpService {
                     }
                 }, 15000);
 
+                // Clean up heartbeat when response closes
                 res.on('close', () => {
                     this.logger.info(`Legacy SSE: Connection closed sessionId=${sessionId}`);
                     clearInterval(heartbeatInterval);
-                    delete this.legacyTransports[sessionId];
-                    this.sessionMetadata.delete(sessionId);
                 });
 
                 res.on('error', (err) => {
                     this.logger.error(`Legacy SSE: Connection error sessionId=${sessionId}`, err);
                     clearInterval(heartbeatInterval);
-                    delete this.legacyTransports[sessionId];
-                    this.sessionMetadata.delete(sessionId);
                 });
 
-                await this.server.connect(transport);
+                // Transport onclose handles map cleanup
+                transport.onclose = () => {
+                    this.logger.info(`Legacy SSE: Transport closed (onclose) sessionId=${sessionId}`);
+                    delete this.legacyTransports[sessionId];
+                    this.sessionMetadata.delete(sessionId);
+                };
+
+                // Each SSE connection gets its own server instance
+                const server = this.createServer();
+                await server.connect(transport);
             } catch (error) {
                 this.logger.error('Legacy SSE: Failed to establish connection:', error);
                 if (!res.headersSent) {
@@ -377,11 +334,9 @@ export class McpService {
             }
 
             this.logger.debug(`Legacy SSE: Message received for sessionId=${sessionId}`);
-            await transport.handlePostMessage(req, res);
+            await transport.handlePostMessage(req, res, req.body);
         });
 
-        // Configure API endpoints for direct tool access
-        this.configureToolEndpoints();
     }
 
     /**
@@ -417,25 +372,6 @@ export class McpService {
         return false;
     }
 
-    /**
-     * Configure HTTP API endpoints for direct tool access
-     */
-    private configureToolEndpoints(): void {
-        this.toolCategories.forEach(category => {
-            category.mcpTools.forEach(tool => {
-                this.app.post(`/api/tool/${tool.name}`, async (req: Request, res: Response) => {
-                    try {
-                        this.logger.info(`API call: ${tool.name}`, req.body);
-                        const result = await tool.handler(req.body, {});
-                        res.json(result);
-                    } catch (error: any) {
-                        this.logger.error(`Tool ${tool.name} error:`, error);
-                        res.status(500).json({ error: error.message });
-                    }
-                });
-            });
-        });
-    }
 
     /**
      * Start the MCP server

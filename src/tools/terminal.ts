@@ -293,6 +293,7 @@ export class TerminalToolCategory extends BaseToolCategory {
         if (locator.title) {
             const titleLower = locator.title.toLowerCase();
             const found = sessions.find(s =>
+                (s.tabParent || s.tab).customTitle?.toLowerCase().includes(titleLower) ||
                 s.tab.customTitle?.toLowerCase().includes(titleLower) ||
                 s.tab.title?.toLowerCase().includes(titleLower)
             );
@@ -333,10 +334,12 @@ For split panes:
                 const sessions = this.findTerminalSessions();
                 const result = sessions.map(s => {
                     const tabAny = s.tab as any;
+                    const parentTab = s.tabParent || s.tab;
+                    this.logger.debug(`[get_session_list] tab=${s.tabIndex} title="${s.tab.title}" customTitle="${parentTab.customTitle}"`);
                     return {
                         sessionId: s.sessionId,
                         tabIndex: s.tabIndex,
-                        title: s.tab.customTitle || s.tab.title || `Terminal ${s.tabIndex}`,
+                        title: parentTab.customTitle || s.tab.customTitle || s.tab.title || `Terminal ${s.tabIndex}`,
                         type: s.tab.constructor.name,
                         isActive: this.app.activeTab === s.tabParent,
                         hasActiveCommand: this._activeCommands.has(s.sessionId),
