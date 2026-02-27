@@ -2,6 +2,32 @@
 
 Tabby-MCP 的所有重要变更都将记录在此文件中。
 
+## [1.4.1] - 2026-02-27
+
+### 🆕 新增
+- **Profile Management 独立工具分类**：将配置文件工具拆分为独立的 `ProfileManagementToolCategory`
+  - 新增工具：`add_profile`（创建配置文件）、`del_profile`（删除配置文件）
+  - 从 TabManagement 迁移：`list_profiles`、`open_profile`、`quick_connect`
+  - `show_profile_selector` 和 `dismiss_dialog` 取消注册（代码保留）
+- **综合测试脚本**：新增 `test/test-endpoints.ts`，覆盖全部 34 个工具的 3 种协议测试
+  - ToolCaller 统一接口抽象，HTTP REST / MCP Legacy SSE / MCP Streamable HTTP 共享测试套件
+  - SSE 读取改为 polling 模型（50ms 轮询 + chunkVersion 变更检测），替代固定等待阻塞
+
+### 🔧 修复
+- **del_profile**：tabby-core 的 `provider.deleteProfile()` 默认实现为空函数，改为直接操作 `config.store.profiles`
+- **close_all_tabs**：改为逐个调用 `app.closeTab()` 关闭，保留 reopen 栈（原 `app.closeAllTabs()` 会绕过）
+- **终端标题**：`get_session_list` 和 `findByTitle` 优先使用 `parentTab.customTitle` 显示正确标题
+
+### ♻️ 变更
+- **MCP 连接架构**：移除单例 McpServer，改为 `createServer()` 工厂方法，每个连接创建独立实例
+  - Streamable HTTP：使用 SDK 的 `isInitializeRequest()` 判断初始化，SDK 生成 sessionId，统一 `transport.handleRequest()`
+  - Legacy SSE：每个连接独立 server 实例，新增 `transport.onclose` 清理回调
+  - HTTP API 端点从 `configureToolEndpoints()` 移至 `registerToolCategory()` 内即时注册
+- **TabManagement 精简**：移除 profile 工具及 `ConfigService`/`ProfilesService`/`TerminalToolCategory` 依赖
+- **mcpLogger**：`exportLogs()` 输出格式从 JSON 数组改为 JSONL（每行一条）
+
+---
+
 ## [1.4.0] - 2026-02-26
 
 ### 🆕 新增

@@ -8,11 +8,10 @@
 [![MCP Protocol](https://img.shields.io/badge/MCP-Protocol-orange.svg)](https://modelcontextprotocol.io/)
 [![GitHub Release](https://img.shields.io/github/v/release/neighbads/Tabby-MCP?color=green)](https://github.com/neighbads/Tabby-MCP/releases)
 [![AI Generated](https://img.shields.io/badge/AI%20Generated-95%25-ff69b4.svg)](#-about-this-project)
-[![Tested on](https://img.shields.io/badge/Tested%20on-macOS-lightgrey.svg)](#%EF%B8%8F-platform-support)
 
 **A Comprehensive MCP Server Plugin for Tabby Terminal**
 
-*Connect AI assistants to your terminal with full control — 34 MCP tools including SFTP support*
+*Connect AI assistants to your terminal with full control — 35 MCP tools including SFTP support*
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -62,7 +61,7 @@
         <li>List all terminal profiles</li>
         <li>Open new tabs with profiles</li>
         <li>SSH quick connect</li>
-        <li>Profile selector dialog</li>
+        <li><b>Add/delete profiles</b></li>
       </ul>
     </td>
     <td width="50%" align="center" valign="top">
@@ -265,14 +264,15 @@ For clients that don't support SSE, use the STDIO bridge:
 | `reopen_last_tab` | Reopen closed tab |
 | `split_tab` | Split current tab (horizontal/vertical) |
 
-### Profile Management (4)
+### Profile Management (5)
 
 | Tool | Description |
 |------|-------------|
 | `list_profiles` | List terminal profiles |
 | `open_profile` | Open tab with profile |
-| `show_profile_selector` | Show profile dialog |
 | `quick_connect` | SSH quick connect |
+| `add_profile` | Create a new profile |
+| `del_profile` | Delete a profile |
 
 ### SFTP Operations (12) 🆕
 
@@ -360,54 +360,6 @@ Enable this mode to allow MCP commands to run **without switching focus** to the
 
 ---
 
-## ⚠️ Platform Support
-
-| Platform | Status | Notes |
-|----------|--------|-------|
-| macOS | ✅ **Tested** | Fully functional |
-| Windows | ⚠️ Untested | Should work — please report issues |
-| Linux | ⚠️ Untested | Should work — please report issues |
-
-> **Note**: This plugin has been developed and tested on macOS. Windows and Linux support should work but is unverified. Community testing and feedback welcome!
-
----
-
-## 🤖 About This Project
-
-<div align="center">
-
-### 🎨 95%+ AI Generated
-
-This project was created almost entirely by AI (Claude/Gemini) through pair programming.  
-The human's role was primarily to provide requirements and test the results.
-
-</div>
-
-### Acknowledgments
-
-This project builds upon the work of [tabby-mcp-server](https://github.com/thuanpham582002/tabby-mcp-server) by [@thuanpham582002](https://github.com/thuanpham582002).
-
-**Improvements over the original:**
-
-| Feature | Original | This Project |
-|---------|----------|--------------|
-| MCP Tools | 4 | **34** |
-| Tab Management | ❌ | ✅ |
-| Profile/SSH | ❌ | ✅ |
-| SFTP Support | ❌ | ✅ |
-| Stable Session IDs | ❌ | ✅ |
-| Streamable HTTP | ❌ | ✅ |
-| Init Bug | Has issue | ✅ Fixed |
-| Install Script | Manual | ✅ One-liner |
-
----
-
-## 🤝 Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
----
-
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE)
@@ -416,7 +368,7 @@ MIT License - see [LICENSE](LICENSE)
 
 <div align="center">
 
-Made with ❤️ by AI and [GentlemanHu](https://github.com/GentlemanHu)
+Made with ❤️ by [neighbads](https://github.com/neighbads)
 
 ⭐ **Star this repo if you find it useful!**
 

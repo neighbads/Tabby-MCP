@@ -8,11 +8,10 @@
 [![MCP Protocol](https://img.shields.io/badge/MCP-Protocol-orange.svg)](https://modelcontextprotocol.io/)
 [![GitHub Release](https://img.shields.io/github/v/release/neighbads/Tabby-MCP?color=green)](https://github.com/neighbads/Tabby-MCP/releases)
 [![AI Generated](https://img.shields.io/badge/AI%20生成-95%25-ff69b4.svg)](#-关于本项目)
-[![Tested on](https://img.shields.io/badge/已测试-macOS-lightgrey.svg)](#%EF%B8%8F-平台支持)
 
 **Tabby 终端的全功能 MCP 服务器插件**
 
-*将 AI 助手连接到您的终端 — 34 个 MCP 工具，包含 SFTP 支持*
+*将 AI 助手连接到您的终端 — 35 个 MCP 工具，包含 SFTP 支持*
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -62,7 +61,7 @@
         <li>列出所有终端配置文件</li>
         <li>使用配置文件打开新标签页</li>
         <li>SSH 快速连接</li>
-        <li>配置文件选择对话框</li>
+        <li><b>新增/删除配置文件</b></li>
       </ul>
     </td>
     <td width="50%" align="center" valign="top">
@@ -229,14 +228,15 @@ npm run build
 | `move_tab_left` / `move_tab_right` | 移动标签页 |
 | `reopen_last_tab` | 重新打开已关闭的标签页 |
 
-### 配置文件管理（4 个）
+### 配置文件管理（5 个）
 
 | 工具 | 说明 |
 |------|------|
 | `list_profiles` | 列出终端配置文件 |
 | `open_profile` | 使用配置文件打开标签页 |
-| `show_profile_selector` | 显示配置文件对话框 |
 | `quick_connect` | SSH 快速连接 |
+| `add_profile` | 新增配置文件 |
+| `del_profile` | 删除配置文件 |
 
 ### SFTP 操作（12 个）🆕
 
@@ -324,54 +324,6 @@ curl -o file.txt "http://<tabby主机>:3001/api/sftp/download?remotePath=/tmp/fi
 
 ---
 
-## ⚠️ 平台支持
-
-| 平台 | 状态 | 说明 |
-|------|------|------|
-| macOS | ✅ **已测试** | 完全功能 |
-| Windows | ⚠️ 未测试 | 应该可用 — 欢迎反馈问题 |
-| Linux | ⚠️ 未测试 | 应该可用 — 欢迎反馈问题 |
-
-> **注意**：本插件在 macOS 上开发和测试。Windows 和 Linux 支持应该可用但未经验证。欢迎社区测试和反馈！
-
----
-
-## 🤖 关于本项目
-
-<div align="center">
-
-### 🎨 95% 以上由 AI 生成
-
-本项目几乎完全由 AI（Claude/Gemini）通过结对编程创建。  
-人类的角色主要是提供需求和测试结果。
-
-</div>
-
-### 致谢
-
-本项目在 [@thuanpham582002](https://github.com/thuanpham582002) 的 [tabby-mcp-server](https://github.com/thuanpham582002/tabby-mcp-server) 基础上构建。
-
-**相比原项目的改进：**
-
-| 特性 | 原项目 | 本项目 |
-|------|--------|--------|
-| MCP 工具 | 4 | **34** |
-| 标签页管理 | ❌ | ✅ |
-| 配置文件/SSH | ❌ | ✅ |
-| SFTP 支持 | ❌ | ✅ |
-| 稳定会话 ID | ❌ | ✅ |
-| Streamable HTTP | ❌ | ✅ |
-| 初始化 Bug | 存在问题 | ✅ 已修复 |
-| 安装脚本 | 手动 | ✅ 一行命令 |
-
----
-
-## 🤝 贡献
-
-查看 [CONTRIBUTING.md](CONTRIBUTING.md) 了解贡献指南。
-
----
-
 ## 📄 许可证
 
 MIT 许可证 - 见 [LICENSE](LICENSE)
@@ -380,7 +332,7 @@ MIT 许可证 - 见 [LICENSE](LICENSE)
 
 <div align="center">
 
-由 AI 和 [GentlemanHu](https://github.com/GentlemanHu) 用 ❤️ 制作
+由 [neighbads](https://github.com/neighbads) 用 ❤️ 制作
 
 ⭐ **如果觉得有用，请给个 Star！**
 

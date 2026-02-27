@@ -2,6 +2,32 @@
 
 All notable changes to Tabby-MCP will be documented in this file.
 
+## [1.4.1] - 2026-02-27
+
+### 🆕 Added
+- **Profile Management tool category**: Extracted profile tools into standalone `ProfileManagementToolCategory`
+  - New tools: `add_profile` (create profiles), `del_profile` (delete profiles)
+  - Moved from TabManagement: `list_profiles`, `open_profile`, `quick_connect`
+  - Removed `show_profile_selector` and `dismiss_dialog` from tool registration (code retained)
+- **Comprehensive test script**: New `test/test-endpoints.ts` covering all 34 tools across 3 protocols
+  - ToolCaller abstraction with shared test suites for HTTP REST, MCP Legacy SSE, and MCP Streamable HTTP
+  - SSE polling model (50ms poll + chunkVersion change detection) replacing fixed-wait blocking
+
+### 🔧 Fixed
+- **del_profile**: `provider.deleteProfile()` has empty default implementation in tabby-core — now directly manipulates `config.store.profiles`
+- **close_all_tabs**: Changed to close tabs individually via `app.closeTab()` to preserve reopen stack (previously `app.closeAllTabs()` bypassed it)
+- **Terminal title**: `get_session_list` and `findByTitle` now prefer `parentTab.customTitle` for correct display
+
+### ♻️ Changed
+- **MCP connection architecture**: Replaced singleton McpServer with per-connection instances via `createServer()` factory
+  - Streamable HTTP: Uses SDK `isInitializeRequest()`, SDK-generated sessionId, unified `transport.handleRequest()`
+  - Legacy SSE: Per-connection server instances with `transport.onclose` cleanup
+  - HTTP API endpoints registered inline in `registerToolCategory()` instead of separate `configureToolEndpoints()`
+- **TabManagement simplified**: Removed profile tools and `ConfigService`/`ProfilesService`/`TerminalToolCategory` dependencies
+- **mcpLogger**: `exportLogs()` output changed from JSON array to JSONL format (one JSON object per line)
+
+---
+
 ## [1.4.0] - 2026-02-26
 
 ### 🆕 Added
