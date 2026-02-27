@@ -76,11 +76,6 @@ New-Item -ItemType Directory -Force -Path $TabbyPluginDir | Out-Null
 Copy-Item -Path (Join-Path $SourceDir.FullName "dist") -Destination $TabbyPluginDir -Recurse -Force
 Copy-Item -Path (Join-Path $SourceDir.FullName "package.json") -Destination $TabbyPluginDir -Force
 
-$TypingsPath = Join-Path $SourceDir.FullName "typings"
-if (Test-Path $TypingsPath) {
-    Copy-Item -Path $TypingsPath -Destination $TabbyPluginDir -Recurse -Force
-}
-
 # Cleanup
 Remove-Item -Recurse -Force $TempDir
 

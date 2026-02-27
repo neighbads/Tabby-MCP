@@ -153,10 +153,6 @@ install_plugin() {
         cp -r "$EXTRACTED_DIR/dist" "$TABBY_PLUGIN_DIR/"
     fi
     
-    if [ -d "$EXTRACTED_DIR/typings" ]; then
-        cp -r "$EXTRACTED_DIR/typings" "$TABBY_PLUGIN_DIR/"
-    fi
-    
     if [ -f "$EXTRACTED_DIR/package.json" ]; then
         cp "$EXTRACTED_DIR/package.json" "$TABBY_PLUGIN_DIR/"
     fi

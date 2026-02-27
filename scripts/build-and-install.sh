@@ -108,10 +108,6 @@ install_plugin() {
     cp -r "$PROJECT_DIR/dist" "$TABBY_PLUGIN_DIR/"
     cp "$PROJECT_DIR/package.json" "$TABBY_PLUGIN_DIR/"
     
-    if [ -d "$PROJECT_DIR/typings" ]; then
-        cp -r "$PROJECT_DIR/typings" "$TABBY_PLUGIN_DIR/"
-    fi
-    
     echo -e "${GREEN}✓ Installed to: $TABBY_PLUGIN_DIR${NC}"
 }
 

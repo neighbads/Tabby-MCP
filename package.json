@@ -23,7 +23,6 @@
     "sse"
   ],
   "main": "dist/index.js",
-  "typings": "typings/index.d.ts",
   "scripts": {
     "build": "webpack --progress --color",
     "watch": "webpack --progress --color --watch",
@@ -31,8 +30,7 @@
     "uninstall-plugin": "bash scripts/uninstall.sh"
   },
   "files": [
-    "dist",
-    "typings"
+    "dist"
   ],
   "author": "neighbads <neighbads@gmail.com>",
   "contributors": [
